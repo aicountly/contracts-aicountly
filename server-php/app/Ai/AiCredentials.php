@@ -70,6 +70,22 @@ final class AiCredentials
     private static array $memo = [];
 
     /**
+     * When each domain|module last failed to resolve from Console.
+     *
+     * A resolve is attempted by forModule() and again by status(), so a single
+     * page load that renders the AI panel makes several. With Console down,
+     * each of those otherwise costs the full connect timeout, and an outage in
+     * a dependency turns into a slow product rather than a disabled feature.
+     * Only the Console attempt is held back — the .env fallback below still
+     * runs every time, so the migration logging it exists for is unaffected.
+     *
+     * @var array<string,int>
+     */
+    private static array $failedUntil = [];
+
+    private const FAILURE_BACKOFF = 15;
+
+    /**
      * Credentials for one module, or null when none can be obtained.
      *
      * @return array{
@@ -199,6 +215,11 @@ final class AiCredentials
             return null;
         }
 
+        $cacheKey = $domain . '|' . $module;
+        if ((self::$failedUntil[$cacheKey] ?? 0) > time()) {
+            return null;
+        }
+
         $url = $base . '/ai/credentials/resolve?domain=' . rawurlencode($domain)
             . '&module=' . rawurlencode($module);
 
@@ -208,6 +229,7 @@ final class AiCredentials
         ], null, self::TIMEOUT, 2);
 
         if ($result['status'] !== 200 || $result['body'] === '') {
+            self::$failedUntil[$cacheKey] = time() + self::FAILURE_BACKOFF;
             self::log(sprintf(
                 'Console AI resolve for %s/%s failed: %s',
                 $domain,
@@ -343,6 +365,7 @@ final class AiCredentials
             }
         }
 
-        self::$memo = [];
+        self::$memo        = [];
+        self::$failedUntil = [];
     }
 }

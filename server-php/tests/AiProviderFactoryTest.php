@@ -321,11 +321,16 @@ assert_same('env', AiProviderFactory::status('m_envfallback')['source'], 'and st
 // Console down, `console`: fail closed rather than reach for .env.
 AiCredentials::forgetForTests();
 Env::configureForTests(['AI_CREDENTIALS_SOURCE' => 'console']);
+$calls = [];
 
 assert_null(AiProviderFactory::forModule('m_failclosed'), 'AI_CREDENTIALS_SOURCE=console refuses the .env fallback');
 $status = AiProviderFactory::status('m_failclosed');
 assert_false($status['configured'], 'and reports unconfigured');
 assert_true($status['console'], 'while still showing that Console itself is wired up');
+
+// Console being down must not cost a connect timeout on every lookup in the
+// same request — the panel resolves once for the provider and again for status.
+assert_count(1, $calls, 'a failed Console lookup is not repeated for each caller in the same request');
 
 // No Console at all: honest about why.
 AiCredentials::forgetForTests();

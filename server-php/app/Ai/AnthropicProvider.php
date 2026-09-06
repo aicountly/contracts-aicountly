@@ -221,7 +221,10 @@ final class AnthropicProvider implements ContractsAiProvider
         $json = is_array($json) ? $json : [];
 
         if ($result['status'] < 200 || $result['status'] >= 300) {
-            $detail = (string) ($json['error']['message'] ?? '');
+            // Providers quote the offending key back in an auth error. Masked
+            // by them or not, it does not belong in an exception that a
+            // controller may log or render.
+            $detail = str_replace($this->apiKey, '[redacted]', (string) ($json['error']['message'] ?? ''));
             $detail = $detail === '' ? '' : ' ' . mb_substr($detail, 0, 200);
 
             throw DomainException::unavailable(

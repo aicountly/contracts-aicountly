@@ -125,6 +125,40 @@ nightly sweeps, nightly cleanup, and the two queue drains every five minutes.
 `GET /api/health` and Settings → Integrations both report which of these are
 configured, so a missing one is visible rather than mysterious.
 
+## Apache, and two rules that are easy to lose
+
+`server-php/.htaccess` ships with the API and takes over from the web build's
+own rules once a request reaches `api/`. Two of its rules are not optional.
+
+### Protecting the API's `.env` over HTTP
+
+Because `api/` sits **inside** the document root, `.env` would be fetchable at
+`https://contracts.aicountly.com/api/.env` unless Apache is told otherwise:
+
+```apache
+RedirectMatch 404 /\.(?!well-known)
+```
+
+`web/public/.htaccess` does the same for the document root, but those rules stop
+applying inside `api/` once the API's own take over — so the rule has to exist
+in both files.
+
+### The `Authorization` header
+
+```apache
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+```
+
+Apache does not pass `Authorization` to PHP under CGI/FastCGI unless it is
+copied explicitly, and after an internal rewrite it arrives only under the
+`REDIRECT_` prefix. Without this the API sees no credential, answers 401 to
+every request, and sign-in fails for everyone with nothing in the logs to
+explain it. `Core\Request::header()` reads both forms for the same reason.
+
+Hosts on Apache 2.4.13+ can use `CGIPassAuth On` instead; the rewrite form works
+everywhere.
+
 ## Repository configuration
 
 **Secrets** (Settings → Secrets and variables → Actions):
