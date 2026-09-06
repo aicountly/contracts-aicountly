@@ -277,29 +277,39 @@ final class ContractController extends BaseController
     {
         $pdo = $this->db();
 
+        // The contract was already confirmed as this tenant's before we got
+        // here, so filtering the children by contract_id alone would be
+        // correct today. They carry cmp_id anyway: it costs nothing, it uses
+        // the same composite indexes, and it means a future refactor that
+        // reaches this method with an unvalidated id returns zero rather than
+        // leaking a count.
         $tables = [
-            'parties'    => 'SELECT COUNT(*) FROM contract_parties WHERE contract_id = ?',
-            'documents'  => 'SELECT COUNT(*) FROM contract_documents WHERE contract_id = ?',
-            'clauses'    => 'SELECT COUNT(*) FROM contract_clauses WHERE contract_id = ?',
-            'obligations' => 'SELECT COUNT(*) FROM contract_obligations WHERE contract_id = ? AND is_active',
-            'milestones' => 'SELECT COUNT(*) FROM contract_milestones WHERE contract_id = ?',
-            'payments'   => 'SELECT COUNT(*) FROM contract_payment_schedules WHERE contract_id = ?',
-            'approvals'  => 'SELECT COUNT(*) FROM contract_approval_instances WHERE contract_id = ?',
-            'versions'   => 'SELECT COUNT(*) FROM contract_document_versions v
-                             JOIN contract_documents d ON d.id = v.document_id WHERE d.contract_id = ?',
-            'amendments' => 'SELECT COUNT(*) FROM contract_amendments WHERE contract_id = ?',
-            'risks'      => 'SELECT COUNT(*) FROM contract_risk_findings WHERE contract_id = ? AND review_status = \'open\'',
-            'comments'   => 'SELECT COUNT(*) FROM contract_comments WHERE contract_id = ? AND deleted_at IS NULL',
-            'links'      => 'SELECT COUNT(*) FROM contract_linked_records WHERE contract_id = ?',
+            'parties'     => 'SELECT COUNT(*) FROM contract_parties WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'documents'   => 'SELECT COUNT(*) FROM contract_documents WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'clauses'     => 'SELECT COUNT(*) FROM contract_clauses WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'obligations' => 'SELECT COUNT(*) FROM contract_obligations WHERE contract_id = ? AND environment = ? AND cmp_id = ? AND is_active',
+            'milestones'  => 'SELECT COUNT(*) FROM contract_milestones WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'payments'    => 'SELECT COUNT(*) FROM contract_payment_schedules WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'approvals'   => 'SELECT COUNT(*) FROM contract_approval_instances WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'versions'    => 'SELECT COUNT(*) FROM contract_document_versions v
+                              JOIN contract_documents d ON d.id = v.document_id
+                              WHERE d.contract_id = ? AND v.environment = ? AND v.cmp_id = ?',
+            'amendments'  => 'SELECT COUNT(*) FROM contract_amendments WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
+            'risks'       => 'SELECT COUNT(*) FROM contract_risk_findings WHERE contract_id = ? AND environment = ? AND cmp_id = ? AND review_status = \'open\'',
+            'comments'    => 'SELECT COUNT(*) FROM contract_comments WHERE contract_id = ? AND environment = ? AND cmp_id = ? AND deleted_at IS NULL',
+            'links'       => 'SELECT COUNT(*) FROM contract_linked_records WHERE contract_id = ? AND environment = ? AND cmp_id = ?',
         ];
 
         $counts = [];
         foreach ($tables as $key => $sql) {
             try {
                 $st = $pdo->prepare($sql);
-                $st->execute([$contractId]);
+                $st->execute([$contractId, $ctx->environment, $ctx->cmpId]);
                 $counts[$key] = (int) $st->fetchColumn();
             } catch (Throwable $e) {
+                // A badge is not worth a 500. A table missing during a partial
+                // deploy shows zero rather than breaking the whole workspace.
+                error_log('[contracts] tab count for ' . $key . ' failed: ' . $e->getMessage());
                 $counts[$key] = 0;
             }
         }

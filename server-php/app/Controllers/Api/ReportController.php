@@ -79,7 +79,6 @@ final class ReportController extends BaseController
         // gives the same list, and the report screen reads it beside `columns`.
         // One array under two names is cheaper than two shapes of pager.
         Response::paginated($rows, (int) ($result['total'] ?? count($rows)), $page['page'], $page['per_page'], [
-            'key'     => $reportKey,
             'columns' => self::columns($result),
             'rows'    => $rows,
             'summary' => $result['summary'] ?? null,

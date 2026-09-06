@@ -65,7 +65,8 @@ final class DocumentController extends BaseController
         $contractId = $this->intId($id);
 
         $this->respond(function () use ($ctx, $contractId): array {
-            $documents = $this->documents()->listForContract($ctx, $contractId);
+            $service   = $this->documents();
+            $documents = $service->listForContract($ctx, $contractId);
 
             // The documents tab draws a file and its history as one row group,
             // so the versions ride along here rather than costing the browser a
@@ -74,7 +75,7 @@ final class DocumentController extends BaseController
                 if (! is_array($document) || array_key_exists('versions', $document)) {
                     continue;
                 }
-                $documents[$index]['versions'] = $this->documents()->versions($ctx, (int) ($document['id'] ?? 0));
+                $documents[$index]['versions'] = $service->versions($ctx, (int) ($document['id'] ?? 0));
             }
 
             return $documents;
