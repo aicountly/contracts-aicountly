@@ -96,14 +96,18 @@ export function DataTable<T>({
         <thead>
           <tr>
             {columns.map((column) => {
-              const sorted = sort?.key === column.sortKey
+              // Narrowed to a value rather than a boolean, so the two uses of
+              // `.dir` below are provably safe. `sorted` alone left TypeScript
+              // unable to see that `sort` is defined inside the branch.
+              const activeSort =
+                column.sortKey !== undefined && sort?.key === column.sortKey ? sort : null
               const hideClass = column.hideBelow ? `ct-table-hide-${column.hideBelow}` : ''
               return (
                 <th
                   key={column.key}
                   scope="col"
                   className={hideClass}
-                  aria-sort={sorted ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                  aria-sort={activeSort ? (activeSort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
                   style={{
                     textAlign: column.align ?? 'left',
                     padding: '9px 12px',
@@ -134,14 +138,14 @@ export function DataTable<T>({
                         padding: 0,
                         cursor: 'pointer',
                         font: 'inherit',
-                        color: sorted ? 'var(--color-text)' : 'inherit',
+                        color: activeSort ? 'var(--color-text)' : 'inherit',
                         textTransform: 'inherit',
                         letterSpacing: 'inherit',
                       }}
                     >
                       {column.header}
-                      {sorted ? (
-                        sort.dir === 'asc' ? (
+                      {activeSort ? (
+                        activeSort.dir === 'asc' ? (
                           <ArrowUp size={12} aria-hidden />
                         ) : (
                           <ArrowDown size={12} aria-hidden />
