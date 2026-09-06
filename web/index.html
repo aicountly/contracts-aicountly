@@ -3,10 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AICOUNTLY Contracts — know what your business has agreed to, and ensure it actually happens." />
+    <meta name="color-scheme" content="light dark" />
     <title>Contracts · Aicountly</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <script>
+      // Theme is applied before the first paint. React mounts several hundred
+      // milliseconds later, and applying it there instead means every dark-mode
+      // user sees a white flash on every page load.
+      (function () {
+        try {
+          var mode = localStorage.getItem('aic.theme.mode') || 'system';
+          var accent = localStorage.getItem('aic.theme.accent') || 'default';
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+          document.documentElement.dataset.theme = accent;
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+        } catch (e) {
+          /* a themed first paint is a nicety; never let it stop the app booting */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      Aicountly Contracts needs JavaScript enabled.
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
