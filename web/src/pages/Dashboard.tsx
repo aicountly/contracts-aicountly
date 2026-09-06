@@ -126,10 +126,25 @@ export default function Dashboard() {
               Refresh
             </Button>
             {can(PERMISSION.CONTRACT_CREATE) ? (
-              <Link to="/contracts/new">
-                <Button variant="primary" icon={<FilePlus2 size={14} />}>
-                  New contract
-                </Button>
+              /* A link, not a button in a link: the browser will not nest two
+                 interactive elements, and people middle-click this one. */
+              <Link
+                to="/contracts/new"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  height: 36,
+                  padding: '0 14px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'rgb(var(--color-primary))',
+                  color: '#fff',
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                }}
+              >
+                <FilePlus2 size={14} aria-hidden />
+                New contract
               </Link>
             ) : null}
           </>

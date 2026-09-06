@@ -472,3 +472,169 @@ export interface ContractInput {
   notes: string | null
   custom_fields: Record<string, unknown>
 }
+
+/* --- Contract workspace: documents and versions --------------------------- */
+
+/**
+ * One stored file of a contract document.
+ *
+ * `status` and `doc_kind` are open vocabularies on the server (a company can be
+ * given new ones without a release here), so they are strings rather than
+ * unions — the UI humanises whatever arrives instead of dropping a value it has
+ * not been taught.
+ */
+export interface DocumentVersion {
+  id: number
+  document_id: number
+  version_number: number
+  status: string | null
+  filename: string | null
+  content_type: string | null
+  size_bytes: number | null
+  checksum: string | null
+  notes: string | null
+  is_current: boolean
+  uploaded_by: string | null
+  uploaded_by_name: string | null
+  executed_at: string | null
+  created_at: string
+}
+
+/** `GET /contracts/{id}/documents` — a document and every version of it. */
+export interface ContractDocument {
+  id: number
+  contract_id: number
+  title: string | null
+  doc_kind: string | null
+  storage_provider: string | null
+  drive_document_id: string | null
+  current_version_id: number | null
+  created_at: string
+  updated_at: string | null
+  versions: DocumentVersion[]
+}
+
+/** `GET /versions/{id}/url` — a short-lived link to the stored file. */
+export interface VersionUrl {
+  url: string
+  expires_at: string | null
+}
+
+/** `POST /uploads/sessions` — where to PUT the bytes, and with which headers. */
+export interface UploadSession {
+  session_id: string
+  upload_url: string
+  method: string | null
+  headers: Record<string, string> | null
+  expires_at: string | null
+  storage_provider: string | null
+}
+
+/** `POST /uploads/sessions/{id}/finalize`. */
+export interface UploadResult {
+  document: ContractDocument
+  version: DocumentVersion
+}
+
+/* --- Contract workspace: version comparison ------------------------------- */
+
+/**
+ * One run of text in a comparison.
+ *
+ * The diff engine names its operation `type` and the AI path names it `op`;
+ * a replacement carries both sides. Every field is optional so a segment shape
+ * the server adds later renders as unchanged text rather than as nothing.
+ */
+export interface CompareSegment {
+  type?: string | null
+  op?: string | null
+  text?: string | null
+  value?: string | null
+  base_text?: string | null
+  target_text?: string | null
+  section?: string | null
+  page?: number | null
+}
+
+/** A change the server judged material, e.g. an amount or a liability cap. */
+export interface ClassifiedChange {
+  id?: number | string | null
+  category?: string | null
+  severity?: string | null
+  title?: string | null
+  summary?: string | null
+  description?: string | null
+  base_value?: string | number | null
+  target_value?: string | number | null
+  section?: string | null
+}
+
+export interface CompareStats {
+  added?: number | null
+  removed?: number | null
+  changed?: number | null
+  unchanged?: number | null
+  similarity?: number | null
+}
+
+/** `GET /contracts/{id}/compare?base=&target=`. */
+export interface CompareResult {
+  segments: CompareSegment[] | null
+  stats: CompareStats | null
+  classified: ClassifiedChange[] | null
+  ai_explanation: string | null
+}
+
+/* --- Contract workspace: parties and links -------------------------------- */
+
+/** `GET /contracts/{id}/parties`. */
+export interface ContractParty {
+  id: number
+  contract_id: number
+  party_role: string | null
+  name: string
+  legal_name: string | null
+  contact_uuid: string | null
+  contact_id: number | string | null
+  email: string | null
+  phone: string | null
+  address: string | null
+  registration_number: string | null
+  signatory_name: string | null
+  signatory_email: string | null
+  signatory_designation: string | null
+  is_primary: boolean
+  snapshot_at: string | null
+  created_at: string | null
+}
+
+/**
+ * A party as it stood at a point in time.
+ *
+ * Contacts can be edited after a contract is signed; the snapshot is what the
+ * agreement was actually executed against, so `data` is stored verbatim and
+ * rendered as it arrives rather than mapped onto today's field names.
+ */
+export interface PartySnapshot {
+  id: number | string
+  party_id: number
+  data: Record<string, unknown> | null
+  captured_by_name: string | null
+  created_at: string
+}
+
+/** `GET /contracts/{id}/links` — a relationship to another record. */
+export interface ContractLink {
+  id: number
+  contract_id: number
+  link_type: string | null
+  related_contract_id: number | null
+  related_contract_number: string | null
+  related_contract_title: string | null
+  related_contract_status: string | null
+  related_type: string | null
+  related_id: number | string | null
+  label: string | null
+  note: string | null
+  created_at: string | null
+}

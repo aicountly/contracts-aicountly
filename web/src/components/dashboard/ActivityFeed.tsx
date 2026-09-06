@@ -30,7 +30,17 @@ export function ActivityFeed({
         <CardHeader title="Recent activity" description="The latest changes across this company." />
       </div>
 
-      <div aria-live="polite" aria-busy={loading}>
+      {/* The live region is a one-line status, not the list itself: announcing
+          twelve entries again on every refresh is unusable. */}
+      <p className="ct-sr-only" aria-live="polite">
+        {loading
+          ? 'Loading recent activity.'
+          : error
+            ? `Recent activity failed to load. ${error.message}`
+            : `Recent activity updated. ${entries?.length ?? 0} entries.`}
+      </p>
+
+      <div aria-busy={loading}>
         {loading ? (
           <FeedSkeleton />
         ) : error ? (

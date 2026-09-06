@@ -135,7 +135,7 @@ export function KpiTile({
 
           {unavailable ? (
             <span style={{ display: 'block', fontSize: 11.5, color: 'var(--color-text-muted)', marginTop: 3 }}>
-              Not available for your role
+              Not available
             </span>
           ) : null}
 
