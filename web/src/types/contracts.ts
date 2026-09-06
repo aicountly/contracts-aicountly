@@ -1009,3 +1009,258 @@ export interface PortfolioRiskFinding {
   counterparty_name: string | null
   contract_status: ContractStatus | null
 }
+
+/* --- Templates ------------------------------------------------------------ */
+
+export type TemplateStatus = 'draft' | 'active' | 'deprecated'
+
+export const TEMPLATE_STATUSES: readonly TemplateStatus[] = ['draft', 'active', 'deprecated']
+
+/** A row of `GET /templates`. */
+export interface TemplateSummary {
+  id: number
+  uuid: string
+  name: string
+  description: string | null
+  contract_type_id: number | null
+  contract_type_name?: string | null
+  status: TemplateStatus
+  version: number
+  approval_status: string
+  owner_uuid: string | null
+  /** The merge keys the saved body uses, recomputed server-side on every save. */
+  variables: string[]
+  tags?: string[]
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * One superseded body of a template.
+ *
+ * Kept rather than overwritten: a contract drafted in March was drafted from
+ * the wording as it stood in March, and answering "what did this produce then"
+ * is only possible if the old body is still here.
+ */
+export interface TemplateVersion {
+  id: number
+  template_id: number
+  version: number
+  body: string
+  variables: string[]
+  change_note: string | null
+  author_uuid: string | null
+  author_name?: string | null
+  created_at: string
+}
+
+/** `GET /templates/{id}`. */
+export interface TemplateDetail extends TemplateSummary {
+  body: string
+  header_html: string | null
+  footer_html: string | null
+  optional_clauses?: unknown[]
+  signature_blocks?: unknown[]
+  schedules?: unknown[]
+  versions?: TemplateVersion[]
+}
+
+/** The body `POST /templates` and `PUT /templates/{id}` accept. */
+export interface TemplateInput {
+  name: string
+  description: string | null
+  contract_type_id: number | null
+  status: TemplateStatus
+  body: string
+  change_note?: string | null
+}
+
+/** One entry of the merge registry, `GET /template-variables`. */
+export interface TemplateVariable {
+  id: number
+  var_key: string
+  label: string
+  source: 'company' | 'counterparty' | 'contract' | 'commercial' | 'custom' | 'system'
+  source_path: string
+  data_type: string
+  example: string | null
+  is_system: boolean
+}
+
+/**
+ * A resolved or unresolved variable in a preview.
+ *
+ * `POST /templates/{id}/preview` reports `used` and `missing` as lists of keys;
+ * an object form carrying the label and the resolved value is accepted too, so
+ * a richer payload renders as more detail rather than as `[object Object]`.
+ */
+export interface PreviewVariable {
+  key?: string | null
+  var_key?: string | null
+  label?: string | null
+  value?: string | null
+}
+
+/** `POST /templates/{id}/preview`. */
+export interface TemplatePreview {
+  html: string | null
+  missing: (string | PreviewVariable)[] | null
+  used: (string | PreviewVariable)[] | null
+}
+
+/* --- Clause library ------------------------------------------------------- */
+
+export type ClauseApprovalStatus = 'draft' | 'approved' | 'deprecated'
+
+export const CLAUSE_APPROVAL_STATUSES: readonly ClauseApprovalStatus[] = [
+  'draft',
+  'approved',
+  'deprecated',
+]
+
+/** `GET /clause-categories`. */
+export interface ClauseCategory {
+  id: number
+  code: string
+  name: string
+  description: string | null
+  risk_weight: number
+  is_system: boolean
+  sort_order: number
+  /** Present when the API counts the library for each category. */
+  clause_count?: number | null
+}
+
+/** A row of `GET /clauses` — the approved wording, not a contract's copy of it. */
+export interface LibraryClauseItem {
+  id: number
+  uuid: string
+  category_id: number | null
+  category_name?: string | null
+  name: string
+  description: string | null
+  standard_text: string
+  fallback_text: string | null
+  prohibited_wording: string | null
+  risk_classification: RiskLevel
+  /** Contract type ids this wording applies to; empty means every type. */
+  applicable_types: (number | string)[]
+  jurisdiction: string | null
+  version: number
+  approval_status: ClauseApprovalStatus
+  effective_from: string | null
+  effective_to: string | null
+  author_uuid: string | null
+  approver_uuid: string | null
+  approved_at: string | null
+  is_system: boolean
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** `GET /clauses/{id}/versions` — superseded wording, kept verbatim. */
+export interface LibraryClauseVersion {
+  id: number
+  clause_id: number
+  version: number
+  standard_text: string
+  fallback_text: string | null
+  change_note: string | null
+  author_uuid: string | null
+  author_name?: string | null
+  created_at: string
+}
+
+/** The body `POST /clauses` and `PUT /clauses/{id}` accept. */
+export interface LibraryClauseInput {
+  name: string
+  description: string | null
+  category_id: number | null
+  standard_text: string
+  fallback_text: string | null
+  prohibited_wording: string | null
+  risk_classification: RiskLevel
+  applicable_types: number[]
+  jurisdiction: string | null
+  approval_status: ClauseApprovalStatus
+  effective_from: string | null
+  effective_to: string | null
+  change_note?: string | null
+}
+
+/* --- AI ------------------------------------------------------------------- */
+
+/** `GET /ai/status`. Reported honestly; Console owns the provider credentials. */
+export interface AiStatus {
+  configured: boolean
+  provider?: string | null
+  model?: string | null
+  source?: string | null
+  message?: string | null
+  disclaimer?: string | null
+}
+
+export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+/** A row of `GET /ai/jobs`. */
+export interface AiJobRow {
+  id: number
+  uuid?: string
+  kind: string
+  contract_id: number | null
+  contract_number?: string | null
+  contract_title?: string | null
+  version_id: number | null
+  status: AiJobStatus
+  attempts: number
+  max_attempts: number
+  provider: string | null
+  model: string | null
+  error_code: string | null
+  error_message: string | null
+  requested_by: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export type ExtractionReviewState = 'pending' | 'accepted' | 'edited' | 'rejected'
+
+/**
+ * One field a model read out of a document.
+ *
+ * `confidence` is 0–1 and may be absent; a missing confidence is treated as the
+ * least certain case, never as certainty.
+ */
+export interface AiExtractionRow {
+  id: number
+  job_id: number | null
+  contract_id: number
+  contract_number?: string | null
+  contract_title?: string | null
+  version_id: number | null
+  field_key: string
+  field_label: string | null
+  extracted_value: string | null
+  normalised_value: string | null
+  value_type: string
+  confidence: number | null
+  source_page: number | null
+  source_excerpt: string | null
+  review_state: ExtractionReviewState
+  accepted_value: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string
+}
+
+/** `POST /ai/contracts/{id}/apply-verified`. */
+export interface ApplyVerifiedResult {
+  contract?: Contract | null
+  /** A count in the contract, a column → value map from the service. */
+  applied?: number | Record<string, unknown> | null
+  skipped?: Record<string, string> | null
+}

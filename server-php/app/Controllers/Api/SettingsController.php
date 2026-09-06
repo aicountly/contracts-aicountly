@@ -161,7 +161,9 @@ final class SettingsController extends BaseController
                  WHERE environment = ? AND cmp_id = ?'
             )->execute(array_merge(
                 array_values($fields),
-                [json_encode($extra, JSON_UNESCAPED_SLASHES), $ctx->environment, $ctx->cmpId]
+                // Cast to an object so an emptied bag stores as {} rather than
+                // [], which is what every reader of this column expects.
+                [json_encode((object) $extra, JSON_UNESCAPED_SLASHES), $ctx->environment, $ctx->cmpId]
             ));
 
             $after = $this->settingsRow($ctx, $pdo);
@@ -1132,7 +1134,7 @@ final class SettingsController extends BaseController
                 );
                 $st->execute([
                     $ctx->environment, $ctx->cmpId, $ctx->uuid, $name, $scope,
-                    json_encode($filters, JSON_UNESCAPED_SLASHES),
+                    json_encode((object) $filters, JSON_UNESCAPED_SLASHES),
                     json_encode(array_values($columns), JSON_UNESCAPED_SLASHES),
                     self::pgBool($shared), self::pgBool($default),
                 ]);
