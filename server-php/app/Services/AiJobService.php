@@ -206,6 +206,10 @@ final class AiJobService
      * where small windows are hit constantly.
      *
      * @return list<array<string,mixed>>
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
      */
     public function claim(string $environment, int $limit, string $workerId): array
     {
@@ -243,6 +247,10 @@ final class AiJobService
     /**
      * @param array<string,mixed> $result
      * @param array{provider?: ?string, model?: ?string, prompt_tokens?: ?int, output_tokens?: ?int, latency_ms?: ?int} $usage
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
      */
     public function complete(int $jobId, array $result, array $usage = []): void
     {
@@ -278,6 +286,33 @@ final class AiJobService
     }
 
     /**
+     * Save what a job has produced so far without ending it.
+     *
+     * This is what makes a staged pipeline resumable rather than merely
+     * restartable. A job that dies after four of its five model calls comes
+     * back, finds the first four answers on the row and pays only for the
+     * fifth — which matters because the calls are the expensive part and a
+     * timeout on the last one is the common way for the pipeline to fail.
+     *
+     *
+     * @audit-unscoped Worker path: acts on a job by id across every tenant, with
+     *                 no TenantContext to scope by. The row itself carries the
+     *                 tenant, and only the queue drain reaches this.
+     *
+     * @param array<string,mixed> $state
+     */
+    public function recordProgress(int $jobId, array $state): void
+    {
+        $this->pdo->prepare(
+            'UPDATE ai_jobs SET result = :result::jsonb, updated_at = CURRENT_TIMESTAMP
+             WHERE id = :id AND status = \'running\''
+        )->execute([
+            'result' => json_encode($state, JSON_UNESCAPED_SLASHES),
+            'id'     => $jobId,
+        ]);
+    }
+
+    /**
      * Record a failed attempt and decide whether there will be another.
      *
      * The error is written whichever way that goes. A job that is going to be
@@ -287,6 +322,10 @@ final class AiJobService
      * Guarded on `status = 'running'` so a caller that fails a job the worker
      * has already failed — cron's catch-all around a service that reported the
      * failure itself — does not spend a second attempt on it.
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
      */
     public function fail(int $jobId, string $code, string $message): void
     {
@@ -348,6 +387,10 @@ final class AiJobService
      * arrives and never errors, which is the worst of both.
      *
      * @return int jobs released or given up on
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
      */
     public function reapStale(string $environment, int $staleSeconds): int
     {
@@ -401,6 +444,10 @@ final class AiJobService
      * it is, which is also the only tenant whose data the job may touch.
      *
      * @return array<string,mixed> the job's result
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
      */
     public function process(int $jobId): array
     {
@@ -728,6 +775,12 @@ final class AiJobService
     // -----------------------------------------------------------------------
 
     /** @return array<string,mixed>|null the raw row, unscoped — worker use only */
+    /**
+     * @audit-unscoped Worker path: a cron worker acts on a job by id across every
+     *                 tenant, with no TenantContext to scope by. The job row
+     *                 itself carries environment and cmp_id, and every caller
+     *                 reaching these is the queue drain, never a request.
+     */
     private function findRaw(int $id): ?array
     {
         $st = $this->pdo->prepare('SELECT * FROM ai_jobs WHERE id = ? LIMIT 1');
@@ -790,6 +843,10 @@ final class AiJobService
      * fails on its last stage still shows what it spent getting there.
      *
      * @param array<string,mixed> $call
+     *
+     * @audit-unscoped Worker path: called while processing a job the worker
+     *                 already holds by id, across every tenant. The row carries
+     *                 the tenant and no request reaches this.
      */
     private function addUsageToJob(int $jobId, array $call): void
     {

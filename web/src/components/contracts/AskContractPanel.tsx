@@ -107,7 +107,9 @@ export function AskContractPanel({
   const messages = thread ?? []
 
   useEffect(() => {
-    if (messages.length > 0) endRef.current?.scrollIntoView({ block: 'nearest' })
+    // Optional-called: jsdom and some embedded webviews do not implement
+    // scrollIntoView, and a missing convenience must not throw the panel away.
+    if (messages.length > 0) endRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [messages.length])
 
   const ask = async () => {

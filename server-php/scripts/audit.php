@@ -50,6 +50,9 @@ function php_files(string $dir): array
 }
 
 $appFiles = php_files($root . '/app');
+
+/** @var list<string> queries deliberately exempted from the tenant-scope check */
+$exempted = [];
 $relative = static fn (string $path): string => str_replace($root . '/', '', $path);
 
 // ---------------------------------------------------------------------------
@@ -181,6 +184,16 @@ function enclosing_method(string $src, int $offset): string
     if (preg_match_all('/\n    (?:public|private|protected|final|static)[^\n]*function\s+\w+/', $before, $m, PREG_OFFSET_CAPTURE)) {
         $last  = end($m[0]);
         $start = (int) $last[1];
+
+        // Reach back over the method's docblock. Annotations that describe the
+        // method — @audit-unscoped among them — live there, and a window that
+        // starts at the signature cannot see them.
+        $head = substr($src, 0, $start);
+        $open = strrpos($head, '/**');
+        if ($open !== false && strpos($head, '*/', $open) !== false
+            && strlen($head) - strpos($head, '*/', $open) < 1200) {
+            $start = $open;
+        }
     }
 
     $end = strpos($src, "\n    }", $offset);
@@ -246,6 +259,18 @@ foreach (array_merge(php_files($root . '/app/Services'), php_files($root . '/app
             if (stripos($window, 'cmp_id') !== false) {
                 continue 2;
             }
+
+            // A queue worker acts on a job by id, across tenants, with no
+            // TenantContext to scope by — the row itself carries the tenant.
+            // That is legitimate and rare, so it is opted out explicitly rather
+            // than silently: the marker has to be written, it is visible in
+            // review, and the count below stops exemptions accumulating
+            // unnoticed.
+            if (preg_match('/@audit-unscoped\s+\S/', $window) === 1) {
+                $exempted[] = $relative($path) . ' — ' . $table;
+                continue 2;
+            }
+
             $warn('tenant-scope', $relative($path) . ' — a query over ' . $table
                 . ' has no cmp_id filter: ' . substr($flat, 0, 110));
             continue 2;
@@ -336,8 +361,16 @@ foreach ($findings as $finding) {
     printf("  %-5s %-18s %s\n", $finding['level'], $finding['check'], $finding['detail']);
 }
 
+if ($exempted !== []) {
+    printf("\n  %d quer%s explicitly exempted from the tenant-scope check (@audit-unscoped):\n",
+        count($exempted), count($exempted) === 1 ? 'y' : 'ies');
+    foreach (array_unique($exempted) as $note) {
+        echo "    - {$note}\n";
+    }
+}
+
 if ($findings === []) {
-    echo "  Clean.\n\n";
+    echo "\n  Clean.\n\n";
     exit(0);
 }
 
