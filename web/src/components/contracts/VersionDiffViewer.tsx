@@ -400,8 +400,7 @@ function SegmentRow({ segment, kind }: { segment: CompareSegment; kind: SegmentK
           paddingTop: 2,
         }}
       >
-        {kind === 'unchanged' ? '' : style.label}
-        <span className="ct-sr-only">{style.label}</span>
+        {kind === 'unchanged' ? <span className="ct-sr-only">{style.label}</span> : style.label}
       </span>
 
       <div style={{ minWidth: 0, flex: 1, fontSize: 13, lineHeight: 1.7, color: 'var(--color-text)' }}>

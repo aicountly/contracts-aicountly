@@ -299,12 +299,22 @@ function t_skip(string $reason): never
     exit(0);
 }
 
-/** A TenantContext for tests, with every permission unless narrowed. */
+/**
+ * A TenantContext for tests.
+ *
+ * Defaults to a contract administrator with every permission, which is what
+ * most tests want. Narrowing `$permissions` alone is NOT enough to test a
+ * permission boundary: several services grant an admin bypass by role rather
+ * than by permission — an approver's step guard, for one — so a context with a
+ * narrowed permission list but the default admin role would sail past the very
+ * check the test means to exercise. Pass `roles` too.
+ */
 function t_context(
     int $cmpId = 1,
     string $uuid = 'USER-A',
     array $permissions = null,
-    string $environment = 'sandbox'
+    string $environment = 'sandbox',
+    array $roles = null
 ): \App\Support\TenantContext {
     return new \App\Support\TenantContext(
         uuid: $uuid,
@@ -315,7 +325,9 @@ function t_context(
         environment: $environment,
         company: ['cmp_id' => $cmpId, 'legal_name' => 'Test Company ' . $cmpId, 'currency' => 'INR'],
         permissions: $permissions ?? \App\Support\Permissions::all(),
-        roles: ['contract_admin'],
+        // A narrowed permission list without a narrowed role is almost always a
+        // mistake, so the default role follows the default permissions.
+        roles: $roles ?? ($permissions === null ? ['contract_admin'] : ['read_only']),
     );
 }
 

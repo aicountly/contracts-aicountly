@@ -295,15 +295,18 @@ export function DocumentUploader({
           gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         }}
       >
-        <Select
-          label="Document kind"
-          value={docKind}
-          disabled={busy || documentId !== null}
-          hint={documentId !== null ? 'Set by the document this version belongs to.' : undefined}
-          error={errors.doc_kind}
-          onChange={(event) => setDocKind(event.target.value)}
-          options={DOC_KINDS}
-        />
+        {/* A version inherits its document's kind, so offering the choice here
+            would imply it could differ from the document it is filed under. */}
+        {documentId === null ? (
+          <Select
+            label="Document kind"
+            value={docKind}
+            disabled={busy}
+            error={errors.doc_kind}
+            onChange={(event) => setDocKind(event.target.value)}
+            options={DOC_KINDS}
+          />
+        ) : null}
         <Select
           label="Version status"
           value={versionStatus}

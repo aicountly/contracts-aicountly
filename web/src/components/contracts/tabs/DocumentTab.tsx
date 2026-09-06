@@ -88,6 +88,10 @@ export function DocumentTab({
 
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [uploaderOpen, setUploaderOpen] = useState(false)
+  // The workspace clears its intent as soon as this tab acknowledges it, so the
+  // uploader's defaults have to be remembered here or they would be gone by the
+  // time it renders.
+  const [pendingIntent, setPendingIntent] = useState<'executed' | 'version' | null>(null)
   const [executedFor, setExecutedFor] = useState<number | null>(null)
 
   const documents = useApiResource<ContractDocument[]>(
@@ -112,9 +116,15 @@ export function DocumentTab({
 
   useEffect(() => {
     if (!uploadIntent) return
+    setPendingIntent(uploadIntent)
     setUploaderOpen(true)
     onUploadIntentHandled?.()
   }, [uploadIntent, onUploadIntentHandled])
+
+  const closeUploader = () => {
+    setUploaderOpen(false)
+    setPendingIntent(null)
+  }
 
   const markExecuted = async (version: DocumentVersion) => {
     setExecutedFor(version.id)
@@ -169,23 +179,23 @@ export function DocumentTab({
               title="Upload the contract document"
               description="The first version becomes the working copy everyone reads."
               action={
-                <Button variant="ghost" size="sm" icon={<X size={14} />} onClick={() => setUploaderOpen(false)}>
+                <Button variant="ghost" size="sm" icon={<X size={14} />} onClick={closeUploader}>
                   Cancel
                 </Button>
               }
             />
             <DocumentUploader
               contractId={contractId}
-              defaultDocKind={uploadIntent === 'executed' ? 'signed_copy' : 'contract'}
-              defaultVersionStatus={uploadIntent === 'executed' ? 'executed' : 'draft'}
+              defaultDocKind={pendingIntent === 'executed' ? 'signed_copy' : 'contract'}
+              defaultVersionStatus={pendingIntent === 'executed' ? 'executed' : 'draft'}
               onUploaded={(result) => {
-                setUploaderOpen(false)
+                closeUploader()
                 setSelectedId(result.version.id)
                 documents.reload()
                 onChanged()
                 toast.success('Document uploaded', `Version ${result.version.version_number} is now on the contract.`)
               }}
-              onCancel={() => setUploaderOpen(false)}
+              onCancel={closeUploader}
             />
           </>
         ) : (
@@ -308,7 +318,7 @@ export function DocumentTab({
                 block
                 variant="secondary"
                 icon={<FileUp size={14} />}
-                onClick={() => setUploaderOpen((open) => !open)}
+                onClick={() => (uploaderOpen ? closeUploader() : setUploaderOpen(true))}
                 aria-expanded={uploaderOpen}
               >
                 {uploaderOpen ? 'Close uploader' : 'Upload a new version'}
@@ -327,16 +337,16 @@ export function DocumentTab({
             <DocumentUploader
               contractId={contractId}
               documentId={selected ? (documentOf(selected)?.id ?? null) : null}
-              defaultDocKind={uploadIntent === 'executed' ? 'signed_copy' : 'contract'}
-              defaultVersionStatus={uploadIntent === 'executed' ? 'executed' : 'draft'}
+              defaultDocKind={pendingIntent === 'executed' ? 'signed_copy' : 'contract'}
+              defaultVersionStatus={pendingIntent === 'executed' ? 'executed' : 'draft'}
               onUploaded={(result) => {
-                setUploaderOpen(false)
+                closeUploader()
                 setSelectedId(result.version.id)
                 documents.reload()
                 onChanged()
                 toast.success('Version uploaded', `Version ${result.version.version_number} added.`)
               }}
-              onCancel={() => setUploaderOpen(false)}
+              onCancel={closeUploader}
             />
           </Card>
         ) : null}
