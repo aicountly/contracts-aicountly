@@ -125,6 +125,38 @@ module   contract_ai
 Until that exists, `/api/health` reports AI as unconfigured — which is the
 correct state, not an error to work around.
 
+### The cross-repo change this required
+
+Console's AI registry is seeded by migration, and its migration `030_ai_registry`
+seeded the domains that existed when it was written. Contracts was not among
+them, so the resolve call above matched nothing: Console's Connected Accounts
+screen offered no Contracts row to bind a key to, and there was no path to a
+configured state at all.
+
+One migration was added to `console-react-app` to close that:
+
+| Repo | File | What it does |
+| --- | --- | --- |
+| `console-react-app` | `server-php/database/migrations/032_contracts_ai_registry.sql` | Inserts the `contracts.aicountly.com` domain and its one `contract_ai` module |
+
+It seeds no key material, following `030`'s precedent — keys are typed into the
+Console UI so plaintext never reaches a migration file, a git history, or a
+deploy log. The migration creates only the shape a key can be bound to; an
+administrator still has to bind one.
+
+One module rather than several, because `AiProviderFactory::DEFAULT_MODULE` is
+the only module key this product sends. Extraction, summarisation, risk
+commentary, Ask Your Contract, deviation analysis and renewal advice all resolve
+through `contract_ai`, so one binding configures the product and a finer split
+in Console would create rows that nothing resolves against.
+
+Nothing else in Console was touched. In particular Contracts is deliberately
+**not** added to `SaasProductRegistry`: that registry is Console's bridge for
+importing a product's notification templates and administering its platform
+users over the product's own portal API. Contracts owns its notifications
+outright and exposes no such bridge, so listing it there would advertise an
+integration that does not exist.
+
 ## Configuration
 
 ```env

@@ -202,7 +202,7 @@ $router->group('/api', function (Router $r): void {
     // --- Reports ---------------------------------------------------------
     $r->get('/reports', 'Api\ReportController@definitions');
     $r->get('/reports/{key}/export', 'Api\ReportController@export');
-    $r->get('/reports/{key}', 'Api\ReportController@run');
+    $r->get('/reports/{key}', 'Api\ReportController@show');
 
     // --- Notifications, comments, links ----------------------------------
     $r->get('/notifications', 'Api\NotificationController@index');

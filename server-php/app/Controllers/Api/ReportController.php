@@ -9,7 +9,6 @@ use App\Core\Response;
 use App\Services\ReportService;
 use App\Support\Enums;
 use App\Support\Permissions;
-use Closure;
 
 /**
  * The report catalogue, one report's rows, and the CSV of them.
@@ -46,25 +45,19 @@ final class ReportController extends BaseController
     /**
      * One page of a report's rows.
      *
-     * The route names this action `run`, and BaseController::run(callable) —
-     * which respond() reaches through `$this` — already holds that name. PHP
-     * allows the override only while it stays signature-compatible with the
-     * base, so the parameter is widened and a closure arriving here is the base
-     * helper being used and goes straight back to it. A string is the report
-     * key out of the URL. Renaming the route instead would mean editing a file
-     * this controller does not own.
+     * Named `show` rather than `run`, which is what the report catalogue calls
+     * the operation: BaseController::run(callable) already holds that name, and
+     * an action that had to widen its signature to coexist with a base helper —
+     * then decide at runtime whether its argument was a URL segment or a
+     * closure — is a trap for whoever reads it next.
      */
-    public function run(mixed $key = null): mixed
+    public function show(?string $key = null): void
     {
-        if ($key instanceof Closure) {
-            return parent::run($key);
-        }
-
         $ctx       = $this->requirePermission(Permissions::REPORT_VIEW);
         $reportKey = $this->reportKey($key);
         $page      = Request::pagination(50, 200);
 
-        $result = parent::run(fn (): array => $this->service()->run(
+        $result = $this->run(fn (): array => $this->service()->run(
             $ctx,
             $reportKey,
             $this->filters(),
@@ -100,7 +93,7 @@ final class ReportController extends BaseController
 
         $reportKey = $this->reportKey($key);
 
-        $result = parent::run(fn (): array => $this->service()->run(
+        $result = $this->run(fn (): array => $this->service()->run(
             $ctx,
             $reportKey,
             $this->filters(),

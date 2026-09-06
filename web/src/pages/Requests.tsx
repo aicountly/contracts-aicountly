@@ -204,13 +204,10 @@ export default function Requests() {
 
   const rows = list.data?.items ?? []
   const total = list.data?.total ?? 0
-  const isFiltered =
-    filters.q !== '' ||
-    filters.status !== '' ||
-    filters.contract_type_id !== '' ||
-    filters.department_id !== '' ||
-    filters.required_by !== '' ||
-    filters.mineOnly
+  // Measured against the default view rather than against "no filters at all":
+  // the queue opens on what is still open, and that is not a filter the user
+  // set, so it must not put a "clear filters" button on a fresh screen.
+  const isFiltered = filterKey !== JSON.stringify(EMPTY_FILTERS)
 
   const columns = useMemo<Column<ContractRequestListItem>[]>(() => {
     const built: Column<ContractRequestListItem>[] = [
@@ -433,7 +430,7 @@ export default function Requests() {
               variant="ghost"
               icon={<X size={13} />}
               onClick={() => {
-                setFilters({ ...EMPTY_FILTERS, status: '' })
+                setFilters(EMPTY_FILTERS)
                 setSearchText('')
               }}
             >
@@ -470,7 +467,7 @@ export default function Requests() {
                 <Button
                   variant="secondary"
                   onClick={() => {
-                    setFilters({ ...EMPTY_FILTERS, status: '' })
+                    setFilters(EMPTY_FILTERS)
                     setSearchText('')
                   }}
                 >
@@ -481,14 +478,19 @@ export default function Requests() {
           ) : (
             <EmptyState
               icon={<FileSignature size={22} />}
-              title="No requests yet"
-              description="This is where the business asks for an agreement — what it is for, who it is with and when it is needed. A reviewer approves it, and it becomes a draft contract."
+              title="Nothing is open"
+              description="This is where the business asks for an agreement — what it is for, who it is with and when it is needed. A reviewer approves it, and it becomes a draft contract. Requests already converted or rejected are still here under their own status."
               action={
-                canCreate ? (
-                  <Button variant="primary" icon={<Plus size={15} />} onClick={() => setCreating(true)}>
-                    Raise the first request
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {canCreate ? (
+                    <Button variant="primary" icon={<Plus size={15} />} onClick={() => setCreating(true)}>
+                      Raise a request
+                    </Button>
+                  ) : null}
+                  <Button variant="secondary" onClick={() => setFilters({ ...filters, status: '' })}>
+                    Show every status
                   </Button>
-                ) : undefined
+                </div>
               }
             />
           )
@@ -531,7 +533,7 @@ export default function Requests() {
             <Button
               variant="ghost"
               onClick={() => {
-                setFilters({ ...EMPTY_FILTERS, status: '' })
+                setFilters(EMPTY_FILTERS)
                 setSearchText('')
               }}
             >

@@ -105,7 +105,11 @@ Authorization: Bearer <CONSOLE_SERVICE_KEY>
 
 No provider key is ever stored on this host. Without Console, every AI feature
 reports itself as unavailable — it does not fall back to a stub, because an
-empty risk assessment is indistinguishable from a clean contract. See
+empty risk assessment is indistinguishable from a clean contract.
+
+Registering this domain and module in Console's AI registry required one
+cross-repo change — `console-react-app` migration `032_contracts_ai_registry` —
+recorded, with the rest of the Console contract, in
 [`CONSOLE_AI_CONFIG.md`](./CONSOLE_AI_CONFIG.md).
 
 ## Linked records — the extension point

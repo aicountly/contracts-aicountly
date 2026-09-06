@@ -51,8 +51,20 @@ function php_files(string $dir): array
 
 $appFiles = php_files($root . '/app');
 
+/**
+ * Show each exempted query, not just its file and table.
+ *
+ * An exemption is only reviewable if you can see what it covers: the marker is
+ * per-method, so one reason can blanket several statements, and `--verbose` is
+ * how you check that none of them is a tenant read that wandered in.
+ */
+$verbose = in_array('--verbose', $argv, true) || in_array('-v', $argv, true);
+
 /** @var list<string> queries deliberately exempted from the tenant-scope check */
 $exempted = [];
+
+/** @var list<string> controller actions deliberately exempted from the permission check */
+$unauthenticated = [];
 $relative = static fn (string $path): string => str_replace($root . '/', '', $path);
 
 // ---------------------------------------------------------------------------
@@ -141,6 +153,14 @@ foreach ($routes as $route) {
 // requireContext is reachable without an authorisation decision. HealthController
 // and AuthRelayController are the deliberate exceptions: they answer before a
 // session exists.
+//
+// A single action can opt out too, with `@audit-unauthenticated <reason>` in its
+// docblock — the signature webhook is the case this exists for, because the
+// provider posting it has no session to check and authenticity is established by
+// verifying the vendor's signature over the raw body instead. The marker is
+// deliberately per-method: exempting the whole class would take the other five
+// signature actions out of the check with it. A reason is required, and the
+// exemptions are counted at the end so they cannot accumulate unnoticed.
 $publiclyUnauthenticated = [
     'App\\Controllers\\Api\\HealthController',
     'App\\Controllers\\Api\\AuthRelayController',
@@ -157,15 +177,31 @@ foreach (php_files($root . '/app/Controllers') as $path) {
     }
 
     $src = file_get_contents($path) ?: '';
-    preg_match_all('/public function (\w+)\s*\([^)]*\)\s*:\s*void\s*\{(.*?)\n    \}/s', $src, $actions, PREG_SET_ORDER);
+    preg_match_all(
+        '/public function (\w+)\s*\([^)]*\)\s*:\s*void\s*\{(.*?)\n    \}/s',
+        $src,
+        $actions,
+        PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+    );
 
-    foreach ($actions as [, $name, $body]) {
+    foreach ($actions as $action) {
+        [$name] = $action[1];
+        [$body] = $action[2];
         if (str_starts_with($name, '__')) {
             continue;
         }
-        if (preg_match('/require(?:Any)?Permission|requireContext/', $body) !== 1) {
-            $fail('unguarded-action', "{$class}::{$name}() does not check a permission");
+        if (preg_match('/require(?:Any)?Permission|requireContext/', $body) === 1) {
+            continue;
         }
+
+        // The marker lives in the docblock above the signature, which is outside
+        // the matched body — so look back from the match, not inside it.
+        if (preg_match('/@audit-unauthenticated:?[ \t]+[^\s*]/', docblock_above($src, (int) $action[0][1])) === 1) {
+            $unauthenticated[] = "{$class}::{$name}()";
+            continue;
+        }
+
+        $fail('unguarded-action', "{$class}::{$name}() does not check a permission");
     }
 }
 
@@ -176,6 +212,62 @@ foreach (php_files($root . '/app/Controllers') as $path) {
  * Falls back to a generous window when no method boundary is found — a
  * top-level script, say — which keeps the caller from having to special-case it.
  */
+/**
+ * The docblock immediately above the declaration at $offset, or ''.
+ *
+ * Bounded by distance rather than by parsing: the comment has to be the one
+ * attached to this declaration, so a `*\/` far above it is some earlier
+ * method's docblock and does not count. 400 characters is comfortably longer
+ * than any docblock in this codebase and far shorter than the gap between two
+ * methods.
+ */
+function docblock_above(string $src, int $offset): string
+{
+    $head = substr($src, 0, $offset);
+    $close = strrpos($head, '*/');
+    if ($close === false || strlen($head) - $close > 400) {
+        return '';
+    }
+
+    $open = strrpos(substr($head, 0, $close), '/**');
+
+    return $open === false ? '' : substr($head, $open, $close - $open);
+}
+
+/**
+ * PHP source with its comments removed, for checks that must see code only.
+ *
+ * Uses the tokenizer rather than a regex: `'-- not a comment'` inside a SQL
+ * literal and `//` inside a URL both defeat the obvious pattern, and getting
+ * this wrong in either direction breaks a security check.
+ */
+function strip_comments(string $php): string
+{
+    // token_get_all needs a parsable unit; a method body alone is not one.
+    $tokens = @token_get_all('<?php ' . $php);
+    if ($tokens === []) {
+        return $php;
+    }
+
+    $out = '';
+    foreach ($tokens as $token) {
+        if (is_array($token)) {
+            if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                // Keep the newlines so nothing on adjacent lines runs together.
+                $out .= str_repeat("\n", substr_count($token[1], "\n"));
+
+                continue;
+            }
+            $out .= $token[1];
+
+            continue;
+        }
+        $out .= $token;
+    }
+
+    return $out;
+}
+
 function enclosing_method(string $src, int $offset): string
 {
     $before = substr($src, 0, $offset);
@@ -256,7 +348,14 @@ foreach (array_merge(php_files($root . '/app/Services'), php_files($root . '/app
             if (preg_match('/\b(?:FROM|UPDATE|INTO)\s+' . preg_quote($table, '/') . '\b/i', $flat) !== 1) {
                 continue;
             }
-            if (stripos($window, 'cmp_id') !== false) {
+            // Comments stripped first. `cmp_id` in a docblock is prose about
+            // the filter, not the filter — and a check that a sentence can
+            // satisfy is one every future method can pass by describing itself.
+            // (This is not hypothetical: an exemption whose reason mentioned
+            // "a cmp_id filter" silenced its own query here.) The marker test
+            // below still reads the full window, because the marker lives in a
+            // comment by design.
+            if (stripos(strip_comments($window), 'cmp_id') !== false) {
                 continue 2;
             }
 
@@ -266,8 +365,9 @@ foreach (array_merge(php_files($root . '/app/Services'), php_files($root . '/app
             // than silently: the marker has to be written, it is visible in
             // review, and the count below stops exemptions accumulating
             // unnoticed.
-            if (preg_match('/@audit-unscoped\s+\S/', $window) === 1) {
-                $exempted[] = $relative($path) . ' — ' . $table;
+            if (preg_match('/@audit-unscoped:?[ \t]+[^\s*]/', $window) === 1) {
+                $exempted[] = $relative($path) . ' — ' . $table
+                    . ($verbose ? ': ' . substr($flat, 0, 90) : '');
                 continue 2;
             }
 
@@ -359,6 +459,14 @@ printf(
 
 foreach ($findings as $finding) {
     printf("  %-5s %-18s %s\n", $finding['level'], $finding['check'], $finding['detail']);
+}
+
+if ($unauthenticated !== []) {
+    printf("\n  %d controller action(s) explicitly exempted from the permission check (@audit-unauthenticated):\n",
+        count($unauthenticated));
+    foreach (array_unique($unauthenticated) as $note) {
+        echo "    - {$note}\n";
+    }
 }
 
 if ($exempted !== []) {
