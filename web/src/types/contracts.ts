@@ -195,6 +195,8 @@ export interface DashboardChartPoint {
   total?: number | string | null
   amount?: number | string | null
   currency?: string | null
+  /** Approval throughput only. Null where a month had nothing to average. */
+  avg_days?: number | null
 }
 
 /** `GET /dashboard/charts`. */
@@ -209,6 +211,8 @@ export interface DashboardCharts {
   obligations_timeline: DashboardChartPoint[]
   customer_vs_vendor: DashboardChartPoint[]
   monthly_executed: DashboardChartPoint[]
+  counterparty_mix: DashboardChartPoint[]
+  approval_throughput: DashboardChartPoint[]
 }
 
 /** One row of `GET /dashboard/my-actions`. */
@@ -1263,4 +1267,492 @@ export interface ApplyVerifiedResult {
   /** A count in the contract, a column → value map from the service. */
   applied?: number | Record<string, unknown> | null
   skipped?: Record<string, string> | null
+}
+
+/* --- Reports -------------------------------------------------------------- */
+
+/**
+ * The only filters `GET /reports/{key}` reads.
+ *
+ * ReportController drops every other query parameter rather than passing it on,
+ * so a control the catalogue asks for outside this set would look like a filter
+ * and quietly do nothing. The report screen renders from this list, and a
+ * definition names the subset that applies to it.
+ */
+export const REPORT_FILTER_KEYS = [
+  'contract_type_id',
+  'department_id',
+  'owner_uuid',
+  'counterparty',
+  'status',
+  'risk_level',
+  'date_from',
+  'date_to',
+] as const
+
+export type ReportFilterKey = (typeof REPORT_FILTER_KEYS)[number]
+
+export type ReportFilterValues = Partial<Record<ReportFilterKey, string>>
+
+export type ReportColumnType =
+  | 'text'
+  | 'number'
+  | 'money'
+  | 'percent'
+  | 'date'
+  | 'datetime'
+  | 'boolean'
+  | 'status'
+  | 'risk'
+
+/**
+ * One column of a report, as the catalogue describes it.
+ *
+ * `label`/`header` and the loose `type` are both accepted because the catalogue
+ * is server-side data rather than a compiled contract: a report added after this
+ * file was written must still render, with an unknown type falling back to text
+ * rather than throwing the screen away.
+ */
+export interface ReportColumnDefinition {
+  key: string
+  label?: string | null
+  header?: string | null
+  type?: ReportColumnType | string | null
+  align?: 'left' | 'right' | 'center' | null
+  width?: number | string | null
+  /** Row field holding the currency for a money column. */
+  currency_key?: string | null
+  /** Row field holding a contract id, so the cell can link to the record. */
+  link_key?: string | null
+  /** Hidden below this viewport width, so a phone shows the columns that matter. */
+  hide_below?: 'sm' | 'md' | 'lg' | null
+}
+
+/** Columns as `GET /reports/{key}` may spell them. */
+export type ReportColumnsPayload =
+  | ReportColumnDefinition[]
+  | string[]
+  | Record<string, string>
+
+/** One entry of `GET /reports`. */
+export interface ReportDefinition {
+  key: string
+  name?: string | null
+  title?: string | null
+  description?: string | null
+  group?: string | null
+  category?: string | null
+  /** Which of REPORT_FILTER_KEYS this report accepts. */
+  filters?: string[] | null
+  columns?: ReportColumnsPayload | null
+  default_filters?: ReportFilterValues | null
+}
+
+/** A report row is whatever its columns say; the definition is the schema. */
+export type ReportRow = Record<string, unknown>
+
+/** Totals and counts the report carries alongside its rows. */
+export type ReportSummary = Record<string, unknown>
+
+/** `GET /reports/{key}` — a page of rows, plus the columns to read them with. */
+export interface ReportResult extends Paged<ReportRow> {
+  columns?: ReportColumnsPayload | null
+  rows?: ReportRow[] | null
+  summary?: ReportSummary | null
+}
+
+/* --- Notifications -------------------------------------------------------- */
+
+/** Mirrors ck_notification_severity. */
+export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const
+
+export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number]
+
+/** One row of `GET /notifications`. */
+export interface NotificationItem {
+  id: number
+  uuid?: string | null
+  event_type: string
+  title: string
+  body?: string | null
+  severity: NotificationSeverity | string
+  contract_id?: number | null
+  contract_number?: string | null
+  contract_title?: string | null
+  link_path?: string | null
+  metadata?: Record<string, unknown> | null
+  is_read?: boolean
+  read_at?: string | null
+  email_sent_at?: string | null
+  created_at: string
+}
+
+/** The unread count rides along with the page so the bell and the list agree. */
+export interface NotificationPage extends Paged<NotificationItem> {
+  unread?: number
+}
+
+/* --- Global search -------------------------------------------------------- */
+
+export interface SearchContractHit {
+  id: number
+  contract_number?: string | null
+  title: string
+  counterparty_name?: string | null
+  status?: string | null
+  contract_type_name?: string | null
+  snippet?: string | null
+}
+
+export interface SearchClauseHit {
+  id: number
+  title: string
+  category_name?: string | null
+  approval_status?: string | null
+  snippet?: string | null
+  /** Present when the hit is a clause inside a contract rather than a library entry. */
+  contract_id?: number | null
+  contract_title?: string | null
+}
+
+export interface SearchDocumentHit {
+  id: number
+  title?: string | null
+  filename?: string | null
+  doc_kind?: string | null
+  version_id?: number | null
+  contract_id?: number | null
+  contract_number?: string | null
+  contract_title?: string | null
+  snippet?: string | null
+}
+
+/** `GET /search?q=` — three lists the header box searches across. */
+export interface SearchResults {
+  contracts?: SearchContractHit[] | null
+  clauses?: SearchClauseHit[] | null
+  documents?: SearchDocumentHit[] | null
+  total?: number | null
+}
+
+/* --- Settings ------------------------------------------------------------- */
+
+/** The `contract_settings` row, from `GET /settings`. */
+export interface ContractSettings {
+  id?: number
+  number_prefix: string
+  number_pad: number
+  number_include_year: boolean
+  number_reset_yearly: boolean
+  default_currency: string
+  default_notice_days: number
+  /** A descending ladder of days, e.g. "90,60,30,15,7". */
+  expiry_alert_days: string
+  obligation_alert_days: string
+  approval_escalation_days: number
+  ai_enabled: boolean
+  ai_auto_extract: boolean
+  ai_auto_risk: boolean
+  default_role: string
+  settings_json?: Record<string, unknown> | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** What the next contract and request will be numbered. */
+export interface NumberingPreview {
+  contract?: string | null
+  request?: string | null
+}
+
+export interface SettingsPayload {
+  settings: ContractSettings
+  numbering_preview?: NumberingPreview | null
+}
+
+export const COUNTERPARTY_SIDES = ['customer', 'vendor', 'internal', 'either'] as const
+
+/** A configured contract type, in full, from `GET /settings/contract-types`. */
+export interface ContractTypeRow {
+  id: number
+  uuid?: string | null
+  code: string
+  name: string
+  description?: string | null
+  category: string
+  counterparty_side: string
+  default_renewal_type?: string | null
+  default_notice_days?: number | null
+  default_term_months?: number | null
+  /** Opaque to this screen, and resent on save so a PUT does not clear it. */
+  required_fields?: unknown[] | null
+  mandatory_clauses?: unknown[] | null
+  default_template_id?: number | null
+  approval_workflow_id?: number | null
+  is_system?: boolean
+  is_active: boolean
+  sort_order: number
+}
+
+/** A department, in full, from `GET /settings/departments`. */
+export interface DepartmentRow {
+  id: number
+  name: string
+  code: string
+  head_uuid?: string | null
+  is_active: boolean
+  created_at?: string | null
+}
+
+/** Mirrors ck_custom_fields_type. */
+export const CUSTOM_FIELD_TYPES = [
+  'text',
+  'textarea',
+  'number',
+  'currency',
+  'date',
+  'boolean',
+  'select',
+  'multi_select',
+  'contact_reference',
+  'user_reference',
+] as const
+
+export type CustomFieldType = (typeof CUSTOM_FIELD_TYPES)[number]
+
+/** A custom field definition row, from `GET /settings/custom-fields`. */
+export interface CustomFieldRow {
+  id: number
+  field_key: string
+  label: string
+  field_type: string
+  contract_type_id?: number | null
+  options?: string[] | null
+  is_required: boolean
+  is_filterable: boolean
+  help_text?: string | null
+  sort_order: number
+  is_active: boolean
+}
+
+/** A tag row, with how many contracts carry it. */
+export interface TagRow {
+  id: number
+  name: string
+  colour?: string | null
+  usage_count?: number
+  created_at?: string | null
+}
+
+/** The palette a tag colour is chosen from; the server stores a token, not CSS. */
+export const TAG_COLOURS = [
+  'slate',
+  'green',
+  'blue',
+  'amber',
+  'red',
+  'violet',
+  'teal',
+  'pink',
+] as const
+
+/** Mirrors RiskEngine::SUBJECTS. */
+export const RISK_RULE_SUBJECTS = [
+  'clause_text',
+  'clause_missing',
+  'liability_cap',
+  'auto_renewal',
+  'notice_period',
+  'governing_law',
+  'jurisdiction',
+  'payment_terms',
+  'contract_value',
+  'duration_months',
+  'termination_right',
+  'indemnity',
+  'data_protection',
+  'insurance',
+  'sla_defined',
+  'expiry_date',
+  'counterparty_missing',
+  'signature_missing',
+  'document_missing',
+] as const
+
+/** Mirrors RiskEngine::OPERATORS. */
+export const RISK_RULE_OPERATORS = [
+  'contains',
+  'not_contains',
+  'equals',
+  'not_equals',
+  'greater_than',
+  'less_than',
+  'in_list',
+  'not_in_list',
+  'is_true',
+  'is_false',
+  'is_null',
+  'is_not_null',
+  'regex',
+] as const
+
+/** Operators that compare against nothing — the subject alone decides. */
+export const UNARY_RISK_OPERATORS = ['is_true', 'is_false', 'is_null', 'is_not_null'] as const
+
+/** A configured risk rule, from `GET /settings/risk-rules`. */
+export interface RiskRuleRow {
+  id: number
+  rule_key: string
+  name: string
+  description?: string | null
+  risk_category: string
+  severity: string
+  subject: string
+  operator: string
+  value_text?: string | null
+  value_numeric?: string | number | null
+  value_list?: string[] | null
+  applies_to_types?: number[] | null
+  score_weight: number
+  recommendation?: string | null
+  is_system?: boolean
+  is_active: boolean
+}
+
+/** A built-in role and what it grants. */
+export interface RoleDefinition {
+  slug: string
+  label: string
+  description: string
+  permissions: string[]
+}
+
+/** One person's roles in this company. */
+export interface RoleGrant {
+  user_uuid: string
+  roles: string[]
+  granted_at?: string | null
+}
+
+/** `GET /settings/roles`. */
+export interface RolesPayload {
+  roles: RoleDefinition[]
+  grants: RoleGrant[]
+  permissions?: string[] | null
+  default_role?: string | null
+}
+
+/** One dependency, and whether it is wired up. */
+export interface IntegrationStatus {
+  configured: boolean
+  provider?: string | null
+  detail?: string | null
+}
+
+/** `GET /settings/integrations`. */
+export interface IntegrationsPayload {
+  manage?: IntegrationStatus
+  contacts?: IntegrationStatus
+  drive?: IntegrationStatus
+  console?: IntegrationStatus
+  signature?: IntegrationStatus
+  email?: IntegrationStatus
+  ai?: AiStatus
+}
+
+export const APPROVAL_WORKFLOW_SUBJECTS = [
+  'contract',
+  'request',
+  'amendment',
+  'termination',
+  'renewal',
+] as const
+
+export const APPROVER_TYPES = [
+  'user',
+  'role',
+  'department_head',
+  'contract_owner',
+  'manager',
+] as const
+
+export type ApproverType = (typeof APPROVER_TYPES)[number]
+
+/** One step of an approval workflow. */
+export interface ApprovalWorkflowStep {
+  id?: number
+  step_no: number
+  name: string
+  execution: 'sequential' | 'parallel' | string
+  approver_type: ApproverType | string
+  approver_value?: string | null
+  min_approvals: number
+  can_edit?: boolean
+  escalation_days?: number | null
+  escalate_to_uuid?: string | null
+}
+
+/** A routing rule, from `GET /approval-workflows`. */
+export interface ApprovalWorkflow {
+  id: number
+  uuid?: string | null
+  name: string
+  description?: string | null
+  applies_to: string
+  /** Opaque to the editor, and resent on save so a PUT does not clear it. */
+  conditions?: unknown[] | null
+  match_mode: 'all' | 'any' | string
+  priority: number
+  is_active: boolean
+  escalation_days?: number | null
+  steps?: ApprovalWorkflowStep[] | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** A negotiation playbook, from `GET /playbooks`. */
+export interface PlaybookSummary {
+  id: number
+  uuid?: string | null
+  name: string
+  description?: string | null
+  contract_type_id?: number | null
+  contract_type_name?: string | null
+  is_default: boolean
+  is_active: boolean
+  rule_count?: number | null
+  created_at?: string | null
+}
+
+/** Mirrors ck_playbook_rules_type. */
+export const PLAYBOOK_RULE_TYPES = [
+  'mandatory_clause',
+  'prohibited_clause',
+  'preferred_wording',
+  'max_numeric',
+  'min_numeric',
+  'allowed_list',
+  'prohibited_list',
+  'boolean_flag',
+  'date_window',
+] as const
+
+/** One playbook rule, from `GET /playbooks/{id}/rules`. */
+export interface PlaybookRule {
+  id: number
+  playbook_id: number
+  rule_key: string
+  category_id?: number | null
+  rule_type: string
+  label: string
+  description?: string | null
+  operator?: string | null
+  expected_value?: string | null
+  expected_numeric?: string | number | null
+  expected_list?: string[] | null
+  severity: string
+  risk_category: string
+  recommendation?: string | null
+  is_active: boolean
+  sort_order: number
 }

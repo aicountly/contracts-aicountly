@@ -109,6 +109,7 @@ export default function AiReviewQueue() {
   const [bulkFor, setBulkFor] = useState<number | null>(null)
   const [bulkRunning, setBulkRunning] = useState(false)
   const [applyingFor, setApplyingFor] = useState<number | null>(null)
+  const [retryingJob, setRetryingJob] = useState<number | null>(null)
 
   const resource = useApiResource<QueueData>(
     async (signal) => {
@@ -279,7 +280,7 @@ export default function AiReviewQueue() {
   }
 
   const retryJob = async (job: AiJobRow) => {
-    setBusyId(-job.id)
+    setRetryingJob(job.id)
     try {
       await api.post(`/ai/jobs/${job.id}/retry`)
       toast.success('Extraction queued again', job.contract_number ?? undefined)
@@ -287,7 +288,7 @@ export default function AiReviewQueue() {
     } catch (err) {
       toast.error('Could not retry that job', err instanceof Error ? err.message : undefined)
     } finally {
-      setBusyId(null)
+      setRetryingJob(null)
     }
   }
 
@@ -361,7 +362,7 @@ export default function AiReviewQueue() {
             size="sm"
             variant="secondary"
             icon={<RefreshCw size={13} />}
-            loading={busyId === -job.id}
+            loading={retryingJob === job.id}
             onClick={() => void retryJob(job)}
           >
             Retry

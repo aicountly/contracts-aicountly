@@ -47,6 +47,30 @@ final class DiffService
     /** Word matrix cells, per changed paragraph pair. */
     private const MAX_WORD_CELLS = 250000;
 
+    /** Paragraph pairs weighed when aligning one changed block. */
+    private const MAX_ALIGN_PAIRS = 10000;
+
+    /** Line breaks past which a document with no blank lines is read line by line. */
+    private const LINE_MODE_MIN_BREAKS = 4;
+
+    /**
+     * How alike two paragraphs must be to count as the same paragraph rewritten
+     * rather than one removed and another added.
+     *
+     * Measured over content words only. Two unrelated clauses share stopwords
+     * and little else, so they land far below this; a clause whose figure or
+     * cap has been renegotiated keeps most of its wording and lands well above.
+     */
+    private const ALIGN_THRESHOLD = 0.3;
+
+    /** Words carried by every clause, which therefore say nothing about whether two are the same. */
+    private const STOPWORDS = [
+        'the', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'by', 'with', 'this',
+        'that', 'shall', 'be', 'is', 'are', 'any', 'all', 'as', 'at', 'it', 'its',
+        'such', 'from', 'under', 'has', 'have', 'will', 'may', 'not', 'no', 'if',
+        'than', 'then', 'each', 'other', 'party', 'parties', 'agreement', 'clause',
+    ];
+
     /** Segments kept in the result. A diff longer than this is a rewrite, not a redline. */
     private const MAX_SEGMENTS = 2000;
 
@@ -142,8 +166,12 @@ final class DiffService
             $truncated = true;
         }
 
-        $a = self::paragraphs($base);
-        $b = self::paragraphs($target);
+        // One decision for the pair, not one per document: splitting the two
+        // sides by different rules would report a re-wrapped clause as a
+        // rewrite of everything after it.
+        $split = self::splitMode($base, $target);
+        $a     = self::paragraphs($base, $split);
+        $b     = self::paragraphs($target, $split);
 
         // Identical head and tail come out before the matrix is sized. A
         // one-clause amendment to a fifty-page agreement is the normal case,
@@ -189,6 +217,10 @@ final class DiffService
         }
         for ($i = count($a) - $tail; $i < count($a); $i++) {
             $all[] = ['op' => 'equal', 'text' => $a[$i]];
+        }
+
+        if ($mode === 'lcs') {
+            $all = self::alignRewrites($all);
         }
 
         $segments = self::segmentsFrom($all, $mode === 'lcs');
@@ -441,30 +473,54 @@ final class DiffService
     // -----------------------------------------------------------------------
 
     /**
+     * How to find paragraph boundaries in this pair of documents.
+     *
+     * A blank line is the reliable signal and is preferred wherever either side
+     * has one. Text extracted from a PDF sometimes has none at all, though, and
+     * treating a hundred-clause agreement as a single paragraph would make the
+     * comparison useless — so a long run of unbroken lines is read as one
+     * paragraph per line. A short one is not: two or three lines with no blank
+     * between them is a wrapped sentence, and splitting it would report
+     * re-wrapping as a rewrite.
+     */
+    private static function splitMode(string $base, string $target): string
+    {
+        foreach ([$base, $target] as $text) {
+            if (preg_match('/\n[ \t]*\n/', $text) === 1) {
+                return 'blank';
+            }
+        }
+
+        foreach ([$base, $target] as $text) {
+            if (substr_count(trim($text), "\n") >= self::LINE_MODE_MIN_BREAKS) {
+                return 'line';
+            }
+        }
+
+        return 'blank';
+    }
+
+    /**
      * Split a document into comparable paragraphs.
      *
      * Whitespace inside a paragraph is normalised because the same clause
      * extracted from a PDF and from a DOCX wraps differently, and a diff that
-     * reports every re-flowed line as a rewrite is noise. Falling back to line
-     * splitting matters for the same reason: plenty of extracted text arrives
-     * with no blank line in it at all.
+     * reports every re-flowed line as a rewrite is noise rather than a redline.
      *
      * @return list<string>
      */
-    private static function paragraphs(string $text): array
+    private static function paragraphs(string $text, string $mode = 'blank'): array
     {
         $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
         if ($text === '') {
             return [];
         }
 
-        $blocks = self::cleanBlocks(preg_split('/\n[ \t]*\n+/', $text) ?: []);
-
-        if (count($blocks) <= 1 && str_contains($text, "\n")) {
-            $blocks = self::cleanBlocks(explode("\n", $text));
-        }
-
-        return $blocks;
+        return self::cleanBlocks(
+            $mode === 'line'
+                ? explode("\n", $text)
+                : (preg_split('/\n[ \t]*\n+/', $text) ?: [])
+        );
     }
 
     /** @param list<string> $raw @return list<string> */
@@ -520,7 +576,11 @@ final class DiffService
                 if ($left === $b[$j - 1]) {
                     $current[$j] = $previous[$j - 1] + 1;
                     $row .= 'd';
-                } elseif ($previous[$j] >= $current[$j - 1]) {
+                    // A tie goes left, which puts deletions ahead of insertions
+                    // in the final script. That ordering is what lets a changed
+                    // paragraph be recognised as one rewrite rather than read as
+                    // an addition somewhere above a removal.
+                } elseif ($previous[$j] > $current[$j - 1]) {
                     $current[$j] = $previous[$j];
                     $row .= 'u';
                 } else {
@@ -556,6 +616,171 @@ final class DiffService
         }
 
         return array_reverse($ops);
+    }
+
+    /**
+     * Pair up the paragraphs inside a changed block.
+     *
+     * An LCS only ever says "equal" or "not equal", so a clause whose figure was
+     * renegotiated comes back as a run of removals beside a run of additions —
+     * technically true and useless to read. This pass matches the two runs up by
+     * similarity, so the fee paragraph lines up with the fee paragraph and the
+     * genuinely new clause between them stays an addition of its own.
+     *
+     * Order is preserved: a pair that would cross an already-accepted pair is
+     * refused, because a redline that reorders the agreement is not a redline.
+     *
+     * @param list<array{op: string, text: string}> $ops
+     * @return list<array{op: string, text: string}>
+     */
+    private static function alignRewrites(array $ops): array
+    {
+        $out   = [];
+        $count = count($ops);
+
+        for ($i = 0; $i < $count; $i++) {
+            if ($ops[$i]['op'] !== 'delete') {
+                $out[] = $ops[$i];
+
+                continue;
+            }
+
+            $removed = [];
+            while ($i < $count && $ops[$i]['op'] === 'delete') {
+                $removed[] = $ops[$i]['text'];
+                $i++;
+            }
+
+            $added = [];
+            while ($i < $count && $ops[$i]['op'] === 'insert') {
+                $added[] = $ops[$i]['text'];
+                $i++;
+            }
+            $i--;
+
+            foreach (self::pairUp($removed, $added) as $op) {
+                $out[] = $op;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param list<string> $removed
+     * @param list<string> $added
+     * @return list<array{op: string, text: string}>
+     */
+    private static function pairUp(array $removed, array $added): array
+    {
+        $flat = static function (array $removed, array $added): array {
+            $ops = [];
+            foreach ($removed as $text) {
+                $ops[] = ['op' => 'delete', 'text' => $text];
+            }
+            foreach ($added as $text) {
+                $ops[] = ['op' => 'insert', 'text' => $text];
+            }
+
+            return $ops;
+        };
+
+        $n = count($removed);
+        $m = count($added);
+
+        if ($n === 0 || $m === 0 || $n * $m > self::MAX_ALIGN_PAIRS) {
+            return $flat($removed, $added);
+        }
+
+        $left  = array_map(self::contentWords(...), $removed);
+        $right = array_map(self::contentWords(...), $added);
+
+        $candidates = [];
+        for ($i = 0; $i < $n; $i++) {
+            for ($j = 0; $j < $m; $j++) {
+                $score = self::overlap($left[$i], $right[$j]);
+                if ($score >= self::ALIGN_THRESHOLD) {
+                    $candidates[] = [$score, $i, $j];
+                }
+            }
+        }
+
+        if ($candidates === []) {
+            return $flat($removed, $added);
+        }
+
+        // Best first, and ties broken by position so the same two documents
+        // always produce the same redline.
+        usort($candidates, static fn (array $x, array $y): int => ($y[0] <=> $x[0]) ?: (($x[1] <=> $y[1]) ?: ($x[2] <=> $y[2])));
+
+        $accepted = [];
+        foreach ($candidates as [$score, $i, $j]) {
+            foreach ($accepted as [$ai, $bj]) {
+                if ($i === $ai || $j === $bj || ($i - $ai) * ($j - $bj) < 0) {
+                    continue 2;
+                }
+            }
+            $accepted[] = [$i, $j];
+        }
+
+        usort($accepted, static fn (array $x, array $y): int => $x[0] <=> $y[0]);
+
+        $ops = [];
+        $ai  = 0;
+        $bj  = 0;
+        foreach ($accepted as [$i, $j]) {
+            while ($ai < $i) {
+                $ops[] = ['op' => 'delete', 'text' => $removed[$ai++]];
+            }
+            while ($bj < $j) {
+                $ops[] = ['op' => 'insert', 'text' => $added[$bj++]];
+            }
+            $ops[] = ['op' => 'delete', 'text' => $removed[$i]];
+            $ops[] = ['op' => 'insert', 'text' => $added[$j]];
+            $ai    = $i + 1;
+            $bj    = $j + 1;
+        }
+        while ($ai < $n) {
+            $ops[] = ['op' => 'delete', 'text' => $removed[$ai++]];
+        }
+        while ($bj < $m) {
+            $ops[] = ['op' => 'insert', 'text' => $added[$bj++]];
+        }
+
+        return $ops;
+    }
+
+    /**
+     * The words of a paragraph that say something about which paragraph it is.
+     *
+     * @return array<string,true>
+     */
+    private static function contentWords(string $text): array
+    {
+        $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $out = [];
+        foreach ($words as $word) {
+            if (mb_strlen($word) > 1 && ! in_array($word, self::STOPWORDS, true)) {
+                $out[$word] = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<string,true> $a
+     * @param array<string,true> $b
+     */
+    private static function overlap(array $a, array $b): float
+    {
+        $total = count($a) + count($b);
+        if ($total === 0) {
+            return 0.0;
+        }
+
+        return (2 * count(array_intersect_key($a, $b))) / $total;
     }
 
     /**

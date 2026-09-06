@@ -403,6 +403,35 @@ export default function Dashboard() {
           </ChartCell>
 
           <ChartCell
+            title="Counterparty concentration"
+            series={toChartSeries(charts.data?.counterparty_mix)}
+          >
+            {(title, series) => (
+              <BarChart
+                title={title}
+                description="Who the portfolio is with. The tail is summed rather than dropped."
+                series={series}
+                formatValue={formatCount}
+              />
+            )}
+          </ChartCell>
+
+          <ChartCell
+            title="Approval turnaround"
+            series={monthly(toChartSeries(charts.data?.approval_throughput))}
+          >
+            {(title, series) => (
+              <TimelineChart
+                title={title}
+                description="Approvals completed each month. Runs still open are not counted — an approval sitting on a desk has no duration yet."
+                series={series}
+                formatValue={formatCount}
+                colourIndex={3}
+              />
+            )}
+          </ChartCell>
+
+          <ChartCell
             wide
             title="Contracts executed"
             series={monthly(toChartSeries(charts.data?.monthly_executed))}

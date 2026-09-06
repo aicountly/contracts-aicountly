@@ -939,7 +939,8 @@ function PreviewPanel({ templateId, dirty }: { templateId: number | 'new'; dirty
               {preview.html?.trim() ? (
                 // Sandboxed and script-free: the body is company-authored HTML,
                 // and rendering it into this document would give whoever edits a
-                // template a foothold in everyone else's session.
+                // template a foothold in everyone else's session. The white page
+                // is deliberate in both themes — this is a document, not a panel.
                 <iframe
                   title="Rendered template preview"
                   sandbox=""
