@@ -661,12 +661,15 @@ final class ContractRequestService
             'required_by_date'       => $v->optionalDate('required_by_date', $fallback('required_by_date')),
             'counterparty_name'      => $v->optionalString('counterparty_name', 255, $fallback('counterparty_name')),
             'contact_ref_id'         => $v->optionalString('contact_ref_id', 64, $fallback('contact_ref_id')),
-            'purpose'                => $v->optionalText('purpose', 20000, $fallback('purpose')),
-            'business_justification' => $v->optionalText('business_justification', 20000, $fallback('business_justification')),
+            // optionalString rather than optionalText: only the former takes a
+            // default, and a partial update that dropped the purpose would send
+            // the request back to the reviewer with the reason for it missing.
+            'purpose'                => $v->optionalString('purpose', 20000, $fallback('purpose')),
+            'business_justification' => $v->optionalString('business_justification', 20000, $fallback('business_justification')),
             'estimated_value'        => $v->optionalDecimal('estimated_value', 2, $fallback('estimated_value')),
             'currency'               => $v->optionalCurrency('currency', (string) $fallback('currency', $ctx->currency())),
             'preferred_template_id'  => $v->optionalId('preferred_template_id') ?? ($v->has('preferred_template_id') ? null : $fallback('preferred_template_id')),
-            'notes'                  => $v->optionalText('notes', 20000, $fallback('notes')),
+            'notes'                  => $v->optionalString('notes', 20000, $fallback('notes')),
             'metadata'               => $v->has('metadata') ? $v->optionalObject('metadata') : $this->decodeJson($fallback('metadata')),
         ];
     }

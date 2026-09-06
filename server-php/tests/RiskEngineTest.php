@@ -333,17 +333,66 @@ assert_same('critical', RiskEngine::scoreFromFindings([r_finding(100)])['level']
 assert_same(0, RiskEngine::levelForScore(0) === 'low' ? 0 : 1, 'zero reads low');
 assert_same('critical', RiskEngine::levelForScore(95), 'the level lookup is usable on its own');
 
-$mixed = RiskEngine::scoreFromFindings([
-    r_finding(30, 'high', 'legal'),
+// Findings combine with diminishing returns rather than adding: each takes a
+// share of the remaining clean headroom. A linear sum saturates at 100 for any
+// incomplete contract, and a score that is always "critical 100" tells a
+// reviewer nothing.
+$two = RiskEngine::scoreFromFindings([
+    r_finding(30, 'medium', 'legal'),
     r_finding(30, 'medium', 'commercial'),
 ]);
-assert_same(60, $mixed['score'], 'findings add up');
-assert_same('high', $mixed['level'], 'the sum decides the level');
-assert_same(['commercial' => 30, 'legal' => 30], $mixed['categories'], 'the split is per risk category, in a stable order');
+assert_same(51, $two['score'], 'two 30s combine to 51, not 60');
+assert_same(['commercial' => 30, 'legal' => 30], $two['categories'], 'the split is per category, in a stable order');
 
-$overflow = RiskEngine::scoreFromFindings([r_finding(80, 'critical'), r_finding(70, 'critical'), r_finding(60, 'high', 'compliance')]);
-assert_same(100, $overflow['score'], 'the score is capped at 100');
-assert_same(100, $overflow['categories']['legal'], 'a category is capped at 100 as well');
+$ten = RiskEngine::scoreFromFindings(array_fill(0, 10, r_finding(10, 'medium')));
+assert_same(65, $ten['score'], 'ten minor findings reach 65, not 100');
+
+$twenty = RiskEngine::scoreFromFindings(array_fill(0, 20, r_finding(10, 'medium')));
+assert_same(88, $twenty['score'], 'twenty minor findings reach 88 — the scale stays usable');
+assert_true($twenty['score'] < 100, 'minor findings never saturate the scale on their own');
+
+// The twenty-first minor finding moves the number less than the first serious
+// one would, which is how a reviewer actually weighs them.
+$twentyOne = RiskEngine::scoreFromFindings(array_fill(0, 21, r_finding(10, 'medium')));
+assert_true(
+    $twentyOne['score'] - $twenty['score'] < 2,
+    'adding one more minor finding to twenty barely moves the score'
+);
+
+// Severity sets a floor. A contract with unlimited liability is high risk
+// however tidy the rest of it is, and diminishing returns alone would let one
+// critical finding beside a clean sheet read as medium.
+$oneCritical = RiskEngine::scoreFromFindings([r_finding(25, 'critical', 'legal')]);
+assert_same(80, $oneCritical['score'], 'a single critical finding floors the score at 80');
+assert_same('critical', $oneCritical['level'], 'and therefore reads as critical');
+
+// A single high finding lands in the upper medium band, not the high one. The
+// severity of a finding is not the risk of the contract, and one flag on an
+// otherwise sound agreement is worth reviewing rather than escalating.
+$oneHigh = RiskEngine::scoreFromFindings([r_finding(15, 'high', 'legal')]);
+assert_same(50, $oneHigh['score'], 'a single high finding floors the score at 50');
+assert_same('medium', $oneHigh['level'], 'which reads as medium — a flag, not a crisis');
+
+// The floor is a floor, not a ceiling: several high findings climb into the
+// high band on their own, which is the right way to get there.
+$threeHigh = RiskEngine::scoreFromFindings(array_fill(0, 3, r_finding(30, 'high')));
+assert_true($threeHigh['score'] >= 60, 'three high findings reach the high band (got ' . $threeHigh['score'] . ')');
+assert_same('high', $threeHigh['level'], 'and read as high');
+
+$manyHigh = RiskEngine::scoreFromFindings(array_fill(0, 6, r_finding(30, 'high')));
+assert_true($manyHigh['score'] > $threeHigh['score'], 'six high findings score above three');
+
+$overflow = RiskEngine::scoreFromFindings([
+    r_finding(80, 'critical'),
+    r_finding(70, 'critical'),
+    r_finding(60, 'high', 'compliance'),
+]);
+assert_true($overflow['score'] <= 100, 'the score never exceeds 100');
+assert_same(98, $overflow['score'], 'three severe findings approach but do not reach 100');
+assert_same('critical', $overflow['level'], 'and read as critical');
+
+$total = RiskEngine::scoreFromFindings([r_finding(100, 'critical')]);
+assert_same(100, $total['score'], 'only a finding that is itself total reaches 100');
 
 $dismissed = RiskEngine::scoreFromFindings([r_finding(80, 'critical', 'legal', 'false_positive'), r_finding(10)]);
 assert_same(10, $dismissed['score'], 'a finding a reviewer dismissed stops counting');
@@ -524,7 +573,20 @@ $empty      = r_contract($pdo, 1, 'CON-2026-000002', ['title' => 'Uploaded agree
 $emptyFirst = $engine->assess($ctx1, $empty);
 $emptyKeys  = r_keys($emptyFirst);
 
-assert_same(100, $emptyFirst['overall_score'], 'a record with nothing in it saturates the scale');
+// A record with nothing captured fires almost every rule, so it lands near the
+// top of the scale — but not at 100. Reserving the ceiling means an empty
+// record and a fully-populated contract with unlimited liability and no
+// termination right are still distinguishable, which they should be: the second
+// is a worse contract, the first is merely an unfinished one.
+assert_true(
+    $emptyFirst['overall_score'] >= 80,
+    'a record with nothing in it is critical (got ' . $emptyFirst['overall_score'] . ')'
+);
+assert_same('critical', (string) $emptyFirst['risk_level'], 'and reads as critical');
+assert_true(
+    $emptyFirst['overall_score'] < 100,
+    'but it does not saturate the scale — the top is reserved for something worse'
+);
 assert_same('critical', $emptyFirst['risk_level'], 'and reads critical');
 assert_true(in_array('no_document', $emptyKeys, true), 'a contract with no document behind it is flagged');
 assert_true(in_array('no_counterparty', $emptyKeys, true), 'so is one with no counterparty');
@@ -616,9 +678,12 @@ $renewingKeys       = r_keys($renewingAssessment);
 assert_count(2, $renewingAssessment['findings'], 'an auto-renewing contract with a long notice period fires exactly the two renewal rules');
 assert_true(in_array('auto_renewal_long_notice', $renewingKeys, true), 'the long notice period is found');
 assert_true(in_array('auto_renewal_present', $renewingKeys, true), 'so is the automatic renewal itself');
-assert_same(29, $renewingAssessment['overall_score'], 'two renewal findings score 21 and 8');
-assert_same('low', $renewingAssessment['risk_level'], 'twenty-nine is still a low-risk contract');
-assert_same(['renewal' => 29], $renewingAssessment['category_scores'], 'both findings land in the renewal category');
+// One high finding (a long notice period on an auto-renewal) and one medium
+// (the auto-renewal itself). Worth reviewing before the window closes, not a
+// crisis — the high-severity floor puts it at the top of the medium band.
+assert_same(50, $renewingAssessment['overall_score'], 'an auto-renewing contract with a long notice period reads medium');
+assert_same('medium', (string) $renewingAssessment['risk_level'], 'and is levelled accordingly');
+assert_same(['renewal' => 27], $renewingAssessment['category_scores'], 'both findings land in the renewal category');
 
 $longNotice = null;
 foreach ($renewingAssessment['findings'] as $finding) {

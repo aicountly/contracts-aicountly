@@ -89,8 +89,10 @@ const SUBJECT_TAB: Record<string, string> = {
   payment: 'payments',
   payment_schedule: 'payments',
   approval: 'approvals',
-  document: 'documents',
+  document: 'document',
+  version: 'versions',
   party: 'parties',
+  parties: 'parties',
 }
 
 const SEVERITY_TONE: Record<string, 'danger' | 'warning' | 'info' | 'neutral'> = {

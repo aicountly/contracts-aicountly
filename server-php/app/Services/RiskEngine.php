@@ -57,6 +57,37 @@ final class RiskEngine
      * note than on a critical one, and a company that tunes weights should not
      * have to encode that difference in every row.
      */
+    /**
+     * The floor a single finding of each severity puts under the overall score.
+     *
+     * A contract with unlimited liability is a critical contract however tidy
+     * the rest of it is. Without a floor, diminishing returns would let that one
+     * finding beside an otherwise clean sheet read as "medium", which is exactly
+     * the contract a reviewer most needs to be told about.
+     *
+     * A single *high* finding gets a gentler floor, into the upper medium band
+     * rather than the high one. The severity of a finding is not the risk of the
+     * contract: one long notice period on an otherwise sound agreement is a flag
+     * worth reviewing, not a crisis. Two or three of them climb into the high
+     * band on their own, which is the right way to get there.
+     */
+    private const SEVERITY_FLOOR = [
+        'informational' => 0,
+        'low'           => 0,
+        'medium'        => 0,
+        'high'          => 50,
+        'critical'      => 80,
+    ];
+
+    /** Ordering, so the worst severity present can be found in one pass. */
+    private const SEVERITY_RANK = [
+        'informational' => 0,
+        'low'           => 1,
+        'medium'        => 2,
+        'high'          => 3,
+        'critical'      => 4,
+    ];
+
     private const SEVERITY_MULTIPLIER = [
         'informational' => 0.2,
         'low'           => 0.5,
@@ -375,14 +406,40 @@ final class RiskEngine
      * @param list<array<string,mixed>> $findings
      * @return array{score: int, level: string, categories: array<string,int>}
      */
+    /**
+     * Combine findings into a 0-100 score.
+     *
+     * Not a sum. A linear total saturates: with seventeen seeded rules, any
+     * contract missing a document and a few standard clauses adds past 100, and
+     * every incomplete contract then reads "critical 100" — a score that never
+     * discriminates is worse than no score, because people stop looking at it.
+     *
+     * Instead each finding takes a share of the *remaining* clean headroom:
+     *
+     *     combined = combined + (1 - combined) x impact
+     *
+     * Ten ten-point findings reach 65, not 100. Twenty reach 88. The scale stays
+     * usable across a real portfolio, and adding a twentieth minor gap moves the
+     * number less than adding the first serious one — which matches how a
+     * reviewer actually weighs them.
+     *
+     * Severity then sets a floor, because a contract with unlimited liability is
+     * high risk regardless of how tidy the rest of it is, and diminishing
+     * returns alone would let one critical finding read as "medium" beside a
+     * clean sheet.
+     *
+     * @param list<array<string,mixed>> $findings
+     * @return array{score: int, level: string, categories: array<string,int>}
+     */
     public static function scoreFromFindings(array $findings): array
     {
-        $categories = [];
-        $total      = 0;
+        $categoryFractions = [];
+        $combined          = 0.0;
+        $worst             = null;
 
         foreach ($findings as $finding) {
             // A finding a reviewer has dismissed stops counting. Leaving it in
-            // would mean the only way to clear a false positive is to delete
+            // would mean the only way to clear a false positive is to delete the
             // evidence that it was ever raised.
             if ((string) ($finding['review_status'] ?? 'open') === 'false_positive') {
                 continue;
@@ -400,17 +457,32 @@ final class RiskEngine
                 continue;
             }
 
+            $fraction = min(1.0, $impact / 100);
+            $combined = $combined + (1 - $combined) * $fraction;
+
             $category = Enums::isValid($finding['risk_category'] ?? null, Enums::RISK_CATEGORIES)
                 ? (string) $finding['risk_category']
                 : 'legal';
 
-            $categories[$category] = min(100, ($categories[$category] ?? 0) + $impact);
-            $total += $impact;
+            $running = $categoryFractions[$category] ?? 0.0;
+            $categoryFractions[$category] = $running + (1 - $running) * $fraction;
+
+            if ($worst === null || self::SEVERITY_RANK[$severity] > self::SEVERITY_RANK[$worst]) {
+                $worst = $severity;
+            }
+        }
+
+        $score = (int) round($combined * 100);
+        $score = max($score, self::SEVERITY_FLOOR[$worst] ?? 0);
+        $score = max(0, min(100, $score));
+
+        $categories = [];
+        foreach ($categoryFractions as $category => $fraction) {
+            $categories[$category] = max(0, min(100, (int) round($fraction * 100)));
         }
 
         // Sorted so the stored JSON of two identical assessments is identical.
         ksort($categories);
-        $score = max(0, min(100, $total));
 
         return ['score' => $score, 'level' => self::levelForScore($score), 'categories' => $categories];
     }

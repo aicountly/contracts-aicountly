@@ -61,7 +61,7 @@ const obligation = {
   description: null,
   responsible_party: 'counterparty',
   owner_uuid: null,
-  frequency: 'quarterly',
+  frequency: 'quarterly' as const,
   custom_interval_days: null,
   start_date: '2026-01-01',
   end_date: null,
