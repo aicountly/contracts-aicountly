@@ -638,3 +638,374 @@ export interface ContractLink {
   note: string | null
   created_at: string | null
 }
+
+/* --- The work queues ------------------------------------------------------ */
+
+/**
+ * A contract request: the business asking for an agreement, before there is
+ * one. It survives the conversion, which is why it is a record of its own —
+ * "who asked for this, and what did they say it was for" is a question only
+ * the request can answer.
+ */
+export type RequestStatus =
+  | 'draft'
+  | 'submitted'
+  | 'under_review'
+  | 'more_info_required'
+  | 'approved_for_drafting'
+  | 'rejected'
+  | 'converted'
+
+export const REQUEST_STATUSES: readonly RequestStatus[] = [
+  'draft',
+  'submitted',
+  'under_review',
+  'more_info_required',
+  'approved_for_drafting',
+  'rejected',
+  'converted',
+]
+
+/** The statuses a request is still moving through, as one filter value. */
+export const OPEN_REQUEST_STATUSES: readonly RequestStatus[] = [
+  'submitted',
+  'under_review',
+  'more_info_required',
+]
+
+/** The verdicts `POST /requests/{id}/decision` accepts. */
+export type RequestDecision = 'review' | 'approve' | 'more_info' | 'reject'
+
+/** One row of `GET /requests`. */
+export interface ContractRequestListItem {
+  id: number
+  uuid: string
+  request_number: string
+  title: string
+  status: RequestStatus
+  requester_uuid: string
+  reviewer_uuid: string | null
+  required_by_date: string | null
+  counterparty_name: string | null
+  estimated_value: string | null
+  currency: string
+  contract_type_id: number | null
+  contract_type_name: string | null
+  department_id: number | null
+  department_name: string | null
+  converted_contract_id: number | null
+  converted_contract_number: string | null
+  converted_at: string | null
+  decided_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** `GET /requests/{id}` — the row plus everything the list omits. */
+export interface ContractRequest extends ContractRequestListItem {
+  contact_ref_id: string | null
+  purpose: string | null
+  business_justification: string | null
+  preferred_template_id: number | null
+  decision_notes: string | null
+  decided_by: string | null
+  notes: string | null
+  metadata: Record<string, unknown> | null
+  activity?: RequestActivityEntry[]
+}
+
+/**
+ * One entry of a request's timeline.
+ *
+ * Anchored to the request rather than to a contract, so it reads correctly
+ * before conversion — and conversion writes an entry on both sides.
+ */
+export interface RequestActivityEntry {
+  id: number | string
+  actor_uuid: string | null
+  actor_label: string | null
+  event_type: string
+  summary: string | null
+  icon: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+/** The body `POST /requests` and `PUT /requests/{id}` accept. */
+export interface ContractRequestInput {
+  title: string
+  contract_type_id: number | null
+  department_id: number | null
+  required_by_date: string | null
+  counterparty_name: string | null
+  contact_ref_id: string | null
+  purpose: string | null
+  business_justification: string | null
+  estimated_value: string | null
+  currency: string
+  preferred_template_id: number | null
+  notes: string | null
+}
+
+/**
+ * One row of `GET /approvals/queue` — a step assigned to the viewer, on an
+ * instance that is currently sitting at that step.
+ */
+export interface ApprovalQueueItem {
+  assignment_id: number
+  instance_id: number
+  instance_uuid: string | null
+  step_no: number
+  step_name: string | null
+  status: string
+  assigned_at: string
+  due_at: string | null
+  escalated_at: string | null
+  delegated_from: string | null
+  subject_type: string
+  subject_id: number
+  contract_id: number | null
+  workflow_name: string | null
+  instance_status: string
+  current_step: number
+  submitted_by: string | null
+  submitted_at: string | null
+  contract_number: string | null
+  contract_title: string | null
+  counterparty_name: string | null
+  currency: string | null
+  total_value: string | null
+  risk_level: RiskLevel | null
+  is_overdue: boolean
+}
+
+/** The actions `POST /approvals/{id}/act` accepts. */
+export type ApprovalActionName =
+  | 'approve'
+  | 'reject'
+  | 'send_back'
+  | 'request_changes'
+  | 'comment'
+  | 'reassign'
+
+export type ObligationOccurrenceStatus = (typeof OBLIGATION_STATUSES)[number]
+
+/**
+ * One row of `GET /obligations` — an occurrence, not an obligation.
+ *
+ * The obligation is the rule ("submit a quarterly SLA report"); the occurrence
+ * is the instance that falls due on a date, and it is the instance somebody has
+ * to act on.
+ */
+export interface ObligationOccurrenceRow {
+  id: number
+  uuid: string
+  obligation_id: number
+  contract_id: number
+  sequence_no: number
+  due_date: string
+  grace_until: string | null
+  period_start: string | null
+  period_end: string | null
+  status: ObligationOccurrenceStatus
+  completed_at: string | null
+  completed_by: string | null
+  completion_note: string | null
+  amount: string | null
+  created_at: string
+  updated_at: string
+  obligation_title: string
+  obligation_type: string | null
+  responsible_party: 'company' | 'counterparty' | 'both'
+  owner_uuid: string | null
+  frequency: string | null
+  evidence_required: boolean
+  grace_period_days: number | null
+  currency: string | null
+  contract_number: string | null
+  contract_title: string | null
+  days_to_due: number | null
+  /** Computed against today, so a list rendered between sweeps still tells the truth. */
+  is_overdue: boolean
+}
+
+export const RESPONSIBLE_PARTIES = ['company', 'counterparty', 'both'] as const
+
+export type RenewalStatus =
+  | 'not_yet_due'
+  | 'review_due'
+  | 'under_review'
+  | 'renew'
+  | 'renegotiate'
+  | 'terminate'
+  | 'renewal_in_progress'
+  | 'renewed'
+  | 'closed'
+
+export const RENEWAL_STATUSES: readonly RenewalStatus[] = [
+  'not_yet_due',
+  'review_due',
+  'under_review',
+  'renew',
+  'renegotiate',
+  'terminate',
+  'renewal_in_progress',
+  'renewed',
+  'closed',
+]
+
+export type RenewalDecisionName = 'renew' | 'renegotiate' | 'terminate' | 'defer'
+
+export type RenewalRecommendation = 'renew' | 'renegotiate' | 'terminate' | 'review_manually'
+
+/** The `bucket` values `GET /renewals` understands. */
+export type RenewalBucket =
+  | 'all'
+  | 'expiring_30'
+  | 'expiring_60'
+  | 'expiring_90'
+  | 'notice_due'
+  | 'auto_renewal_risk'
+
+/** One row of `GET /renewals` — a renewal cycle joined to its contract. */
+export interface RenewalPipelineItem {
+  id: number
+  uuid: string | null
+  contract_id: number
+  cycle_no: number
+  current_expiry: string | null
+  notice_deadline: string | null
+  decision_due_date: string | null
+  proposed_start: string | null
+  proposed_expiry: string | null
+  renewal_term_months: number | null
+  status: RenewalStatus
+  owner_uuid: string | null
+  recommendation: RenewalRecommendation | null
+  recommendation_reason: string | null
+  recommendation_source: 'rules' | 'ai' | 'manual' | null
+  decision: RenewalDecisionName | null
+  decision_by: string | null
+  decision_at: string | null
+  decision_notes: string | null
+  renegotiation_required: boolean
+  renewed_contract_id: number | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+  contract_number: string | null
+  contract_title: string | null
+  contract_status: ContractStatus | null
+  counterparty_name: string | null
+  auto_renewal: boolean
+  currency: string | null
+  total_value: string | null
+  notice_period_days: number | null
+  renewal_type: string | null
+  renewal_frequency: string | null
+  contract_type_id: number | null
+  contract_type_name: string | null
+  days_to_decision: number | null
+  days_to_notice: number | null
+  days_to_expiry: number | null
+}
+
+export type AmendmentStatus =
+  | 'draft'
+  | 'under_review'
+  | 'awaiting_approval'
+  | 'awaiting_signature'
+  | 'executed'
+  | 'cancelled'
+
+export const AMENDMENT_STATUSES: readonly AmendmentStatus[] = [
+  'draft',
+  'under_review',
+  'awaiting_approval',
+  'awaiting_signature',
+  'executed',
+  'cancelled',
+]
+
+/**
+ * One row of `GET /amendments` — the portfolio-wide register.
+ *
+ * The contract columns are optional because the register is a join the API
+ * composes; a row that arrives without them still renders, minus the link.
+ */
+export interface AmendmentRegisterItem {
+  id: number
+  contract_id: number
+  amendment_no: number
+  title: string
+  description: string | null
+  effective_date: string | null
+  execution_date: string | null
+  status: AmendmentStatus
+  affected_fields: Record<string, { from?: unknown; to?: unknown }> | null
+  applied_at: string | null
+  applied_by: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  contract_number?: string | null
+  contract_title?: string | null
+  counterparty_name?: string | null
+  contract_status?: ContractStatus | null
+}
+
+export type RiskSeverity = 'informational' | 'low' | 'medium' | 'high' | 'critical'
+
+export const RISK_SEVERITIES: readonly RiskSeverity[] = [
+  'critical',
+  'high',
+  'medium',
+  'low',
+  'informational',
+]
+
+export const RISK_CATEGORIES = [
+  'legal',
+  'commercial',
+  'financial',
+  'compliance',
+  'operational',
+  'data_protection',
+  'renewal',
+  'counterparty',
+  'sla',
+] as const
+
+export type RiskCategory = (typeof RISK_CATEGORIES)[number]
+
+export type RiskReviewStatus = 'open' | 'accepted' | 'mitigated' | 'false_positive' | 'resolved'
+
+export const RISK_REVIEW_STATUSES: readonly RiskReviewStatus[] = [
+  'open',
+  'accepted',
+  'mitigated',
+  'false_positive',
+  'resolved',
+]
+
+/** One row of `GET /risks` — a finding, with the contract it was raised against. */
+export interface PortfolioRiskFinding {
+  id: number
+  contract_id: number
+  rule_key: string | null
+  risk_category: RiskCategory | string
+  severity: RiskSeverity
+  title: string
+  detail: string | null
+  recommendation: string | null
+  source_excerpt: string | null
+  source_page: number | null
+  detected_by: 'rules' | 'ai' | 'manual'
+  ai_confidence: string | number | null
+  review_status: RiskReviewStatus
+  created_at: string
+  contract_number: string | null
+  contract_title: string | null
+  counterparty_name: string | null
+  contract_status: ContractStatus | null
+}

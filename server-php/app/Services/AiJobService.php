@@ -59,8 +59,6 @@ final class AiJobService
     /** Ceiling on a model reply we are willing to hold in memory and store. */
     private const MAX_OUTPUT_TOKENS = 8000;
 
-    private AuditService $audit;
-
     private ActivityService $activity;
 
     /**
@@ -69,7 +67,6 @@ final class AiJobService
      */
     public function __construct(private PDO $pdo, private ?ContractsAiProvider $provider = null)
     {
-        $this->audit    = new AuditService($pdo);
         $this->activity = new ActivityService($pdo);
     }
 

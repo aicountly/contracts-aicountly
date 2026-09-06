@@ -114,6 +114,8 @@ final class AiAnalysisService
                          :exec, :actions::jsonb, :provider, :model, TRUE, :edited_by, :edited_at)
                  RETURNING id'
             );
+            $carried = is_array($previous['edited_sections'] ?? null) ? $previous['edited_sections'] : null;
+
             $st->execute([
                 'env'      => $ctx->environment,
                 'cmp'      => $ctx->cmpId,
@@ -126,7 +128,7 @@ final class AiAnalysisService
                 // reviewer's words and is worth keeping in front of them; the
                 // provenance is what lets the screen say it is older than the
                 // section beside it.
-                'edited'     => json_encode($previous['edited_sections'] ?? null, JSON_UNESCAPED_SLASHES),
+                'edited'     => $carried === null ? null : json_encode($carried, JSON_UNESCAPED_SLASHES),
                 'exec'       => self::sectionText($sections, 'executive_summary'),
                 'actions'    => json_encode(array_values($actions), JSON_UNESCAPED_SLASHES),
                 'provider'   => mb_substr((string) $reply['provider'], 0, 32),

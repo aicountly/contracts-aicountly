@@ -15,7 +15,6 @@ use App\Support\Enums;
 use App\Support\Permissions;
 use App\Support\TenantContext;
 use PDO;
-use Throwable;
 
 /**
  * Reading a contract document into structured data.
@@ -656,10 +655,16 @@ final class AiExtractionService
         $clauses = ['e.environment = :env', 'e.cmp_id = :cmp'];
         $params  = ['env' => $ctx->environment, 'cmp' => $ctx->cmpId];
 
-        $state = Enums::coerce($filters['review_state'] ?? 'pending', ['pending', 'accepted', 'edited', 'rejected'], 'pending');
+        // 'all' is the one filter value that is not a review state: it means
+        // do not narrow by one. Anything unrecognised falls back to pending,
+        // which is the queue a reviewer actually opens.
         if (($filters['review_state'] ?? null) !== 'all') {
-            $clauses[]              = 'e.review_state = :state';
-            $params['state']        = $state;
+            $clauses[]       = 'e.review_state = :state';
+            $params['state'] = Enums::coerce(
+                $filters['review_state'] ?? 'pending',
+                ['pending', 'accepted', 'edited', 'rejected'],
+                'pending'
+            );
         }
 
         if (! empty($filters['contract_id'])) {

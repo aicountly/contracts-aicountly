@@ -34,9 +34,11 @@ use Throwable;
  * statement below carries `environment` and `cmp_id` from the TenantContext,
  * and every write leaves an audit row.
  *
- * A PUT replaces the resource, so a nullable column the caller omits is
- * cleared; COALESCE guards only the NOT NULL columns, where "omitted" can only
- * mean "leave it alone".
+ * Two shapes repeat, and both are deliberate. Every field is read and validated
+ * before the statement runs, because a row written and then reported as a 422
+ * is a row nobody goes back to clean up. And a PUT replaces the resource, so a
+ * nullable column the caller omits is cleared; COALESCE guards only the NOT
+ * NULL columns, where "omitted" can only mean "leave it alone".
  */
 final class SettingsController extends BaseController
 {
@@ -49,7 +51,7 @@ final class SettingsController extends BaseController
      */
     private const FIELD_KEY_SHAPE = '/^[a-z][a-z0-9_]{0,62}$/';
 
-    /** A code is part of a contract number and an export filename, so it stays plain. */
+    /** A code appears in exports and URLs, so it stays plain. */
     private const CODE_SHAPE = '/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/';
 
     /** Screens a saved view can belong to. Free text here would be an unfilterable column. */
@@ -105,33 +107,39 @@ final class SettingsController extends BaseController
         $this->respond(function () use ($ctx): array {
             $pdo    = $this->db();
             $before = $this->settingsRow($ctx, $pdo);
-            $body   = $this->body();
-            $v      = new Validator($body);
+            $v      = new Validator($this->body());
 
-            $prefix        = self::prefix($v, 'number_prefix');
-            $requestPrefix = self::prefix($v, 'request_prefix');
-            $pad           = $v->optionalInt('number_pad', 3, 12);
-            $notice        = $v->optionalInt('default_notice_days', 0, 3650);
-            $escalation    = $v->optionalInt('approval_escalation_days', 0, 365);
-            $expiryLadder  = self::ladder($v, 'expiry_alert_days');
-            $obligationLadder = self::ladder($v, 'obligation_alert_days');
-            $currency      = self::currency($v, 'default_currency');
-            $role          = $v->optionalString('default_role', 32);
+            $fields = [
+                'number_prefix'            => self::prefix($v, 'number_prefix'),
+                'number_pad'               => $v->optionalInt('number_pad', 3, 12),
+                'number_include_year'      => self::pgBool($v->optionalBool('number_include_year')),
+                'number_reset_yearly'      => self::pgBool($v->optionalBool('number_reset_yearly')),
+                'default_currency'         => self::currency($v, 'default_currency'),
+                'default_notice_days'      => $v->optionalInt('default_notice_days', 0, 3650),
+                'expiry_alert_days'        => self::ladder($v, 'expiry_alert_days'),
+                'obligation_alert_days'    => self::ladder($v, 'obligation_alert_days'),
+                'approval_escalation_days' => $v->optionalInt('approval_escalation_days', 0, 365),
+                'ai_enabled'               => self::pgBool($v->optionalBool('ai_enabled')),
+                'ai_auto_extract'          => self::pgBool($v->optionalBool('ai_auto_extract')),
+                'ai_auto_risk'             => self::pgBool($v->optionalBool('ai_auto_risk')),
+                'default_role'             => $v->optionalString('default_role', 32),
+            ];
 
-            if ($role !== null && ! Permissions::isKnownRole($role)) {
+            if ($fields['default_role'] !== null && ! Permissions::isKnownRole($fields['default_role'])) {
                 $v->fail('default_role', 'Choose one of: ' . implode(', ', Permissions::roleSlugs()) . '.');
             }
 
-            $v->assert();
-
             // settings_json is merged rather than replaced: it is the open end
-            // of this table, and a screen that only knows about one key would
+            // of this table, and a screen that knows about one key would
             // otherwise delete every key it has never heard of.
-            $extra = is_array($before['settings_json'] ?? null) ? $before['settings_json'] : [];
-            $extra = array_merge($extra, $v->optionalObject('settings_json'));
+            $extra         = is_array($before['settings_json'] ?? null) ? $before['settings_json'] : [];
+            $extra         = array_merge($extra, $v->optionalObject('settings_json'));
+            $requestPrefix = self::prefix($v, 'request_prefix');
             if ($requestPrefix !== null) {
                 $extra['request_prefix'] = $requestPrefix;
             }
+
+            $v->assert();
 
             $pdo->prepare(
                 'UPDATE contract_settings SET
@@ -151,24 +159,10 @@ final class SettingsController extends BaseController
                     settings_json = ?::jsonb,
                     updated_at = CURRENT_TIMESTAMP
                  WHERE environment = ? AND cmp_id = ?'
-            )->execute([
-                $prefix,
-                $pad,
-                self::pgBool($v->optionalBool('number_include_year')),
-                self::pgBool($v->optionalBool('number_reset_yearly')),
-                $currency,
-                $notice,
-                $expiryLadder,
-                $obligationLadder,
-                $escalation,
-                self::pgBool($v->optionalBool('ai_enabled')),
-                self::pgBool($v->optionalBool('ai_auto_extract')),
-                self::pgBool($v->optionalBool('ai_auto_risk')),
-                $role,
-                json_encode($extra, JSON_UNESCAPED_SLASHES),
-                $ctx->environment,
-                $ctx->cmpId,
-            ]);
+            )->execute(array_merge(
+                array_values($fields),
+                [json_encode($extra, JSON_UNESCAPED_SLASHES), $ctx->environment, $ctx->cmpId]
+            ));
 
             $after = $this->settingsRow($ctx, $pdo);
 
@@ -183,9 +177,9 @@ final class SettingsController extends BaseController
                 'settings.updated'
             );
 
-            // The preview is recomputed after the write, not predicted before
-            // it: an admin changing the prefix or the padding wants to see the
-            // number the next contract will actually get.
+            // Recomputed after the write rather than predicted before it: an
+            // admin changing the prefix or the padding wants to see the number
+            // the next contract will actually get.
             return ['settings' => $after, 'numbering_preview' => $this->numberingPreview($ctx, $pdo)];
         });
     }
@@ -218,10 +212,23 @@ final class SettingsController extends BaseController
             $pdo = $this->db();
             $v   = new Validator($this->body());
 
-            $code = self::code($v, 'code');
-            $name = $v->requiredString('name', 160);
+            $code     = self::code($v, 'code');
+            $name     = $v->requiredString('name', 160);
             $template = $v->optionalId('default_template_id');
             $workflow = $v->optionalId('approval_workflow_id');
+
+            $fields = [
+                'description'          => $v->optionalText('description', 4000),
+                'category'             => $v->optionalString('category', 64, 'general') ?? 'general',
+                'counterparty_side'    => $v->optionalEnum('counterparty_side', ['customer', 'vendor', 'internal', 'either'], 'either') ?? 'either',
+                'default_renewal_type' => $v->optionalEnum('default_renewal_type', Enums::RENEWAL_TYPES),
+                'default_notice_days'  => $v->optionalInt('default_notice_days', 0, 3650),
+                'default_term_months'  => $v->optionalInt('default_term_months', 0, 1200),
+                'required_fields'      => self::jsonOrNull($v, 'required_fields') ?? '[]',
+                'mandatory_clauses'    => self::jsonOrNull($v, 'mandatory_clauses') ?? '[]',
+                'is_active'            => self::pgBool($v->optionalBool('is_active', true)),
+                'sort_order'           => $v->optionalInt('sort_order', 0, 100000, 100) ?? 100,
+            ];
 
             $this->requireOwnRow($pdo, $ctx, $v, 'contract_templates', 'default_template_id', $template);
             $this->requireOwnRow($pdo, $ctx, $v, 'approval_workflows', 'approval_workflow_id', $workflow);
@@ -240,30 +247,23 @@ final class SettingsController extends BaseController
             try {
                 $st->execute([
                     $ctx->environment, $ctx->cmpId, $code, $name,
-                    $v->optionalText('description', 4000),
-                    $v->optionalString('category', 64, 'general') ?? 'general',
-                    $v->optionalEnum('counterparty_side', ['customer', 'vendor', 'internal', 'either'], 'either') ?? 'either',
-                    $v->optionalEnum('default_renewal_type', Enums::RENEWAL_TYPES),
-                    $v->optionalInt('default_notice_days', 0, 3650),
-                    $v->optionalInt('default_term_months', 0, 1200),
-                    self::jsonOrNull($v, 'required_fields') ?? '[]',
-                    self::jsonOrNull($v, 'mandatory_clauses') ?? '[]',
-                    $template, $workflow,
-                    self::pgBool($v->optionalBool('is_active', true)),
-                    $v->optionalInt('sort_order', 0, 100000, 100) ?? 100,
+                    $fields['description'], $fields['category'], $fields['counterparty_side'],
+                    $fields['default_renewal_type'], $fields['default_notice_days'],
+                    $fields['default_term_months'], $fields['required_fields'],
+                    $fields['mandatory_clauses'], $template, $workflow,
+                    $fields['is_active'], $fields['sort_order'],
                 ]);
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'code', 'A contract type with this code already exists.');
             }
-            $v->assert();
 
-            $row = $st->fetch() ?: [];
+            $row = self::hydrateType($st->fetch() ?: []);
             (new AuditService($pdo))->log($ctx, 'contract_type', (int) ($row['id'] ?? 0), 'settings.contract_type_created', null, [
                 'code' => ['from' => null, 'to' => $code],
                 'name' => ['from' => null, 'to' => $name],
             ]);
 
-            return self::hydrateType($row);
+            return $row;
         }, 201);
     }
 
@@ -279,8 +279,27 @@ final class SettingsController extends BaseController
 
             $template = $v->optionalId('default_template_id');
             $workflow = $v->optionalId('approval_workflow_id');
+
+            $fields = [
+                'code'                 => self::code($v, 'code', false),
+                'name'                 => $v->optionalString('name', 160),
+                'description'          => $v->optionalText('description', 4000),
+                'category'             => $v->optionalString('category', 64),
+                'counterparty_side'    => $v->optionalEnum('counterparty_side', ['customer', 'vendor', 'internal', 'either']),
+                'default_renewal_type' => $v->optionalEnum('default_renewal_type', Enums::RENEWAL_TYPES),
+                'default_notice_days'  => $v->optionalInt('default_notice_days', 0, 3650),
+                'default_term_months'  => $v->optionalInt('default_term_months', 0, 1200),
+                'required_fields'      => self::jsonOrNull($v, 'required_fields'),
+                'mandatory_clauses'    => self::jsonOrNull($v, 'mandatory_clauses'),
+                'default_template_id'  => $template,
+                'approval_workflow_id' => $workflow,
+                'is_active'            => self::pgBool($v->optionalBool('is_active')),
+                'sort_order'           => $v->optionalInt('sort_order', 0, 100000),
+            ];
+
             $this->requireOwnRow($pdo, $ctx, $v, 'contract_templates', 'default_template_id', $template);
             $this->requireOwnRow($pdo, $ctx, $v, 'approval_workflows', 'approval_workflow_id', $workflow);
+            $v->assert();
 
             $st = $pdo->prepare(
                 'UPDATE contract_types SET
@@ -304,26 +323,10 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    self::code($v, 'code', false),
-                    $v->optionalString('name', 160),
-                    $v->optionalText('description', 4000),
-                    $v->optionalString('category', 64),
-                    $v->optionalEnum('counterparty_side', ['customer', 'vendor', 'internal', 'either']),
-                    $v->optionalEnum('default_renewal_type', Enums::RENEWAL_TYPES),
-                    $v->optionalInt('default_notice_days', 0, 3650),
-                    $v->optionalInt('default_term_months', 0, 1200),
-                    self::jsonOrNull($v, 'required_fields'),
-                    self::jsonOrNull($v, 'mandatory_clauses'),
-                    $template, $workflow,
-                    self::pgBool($v->optionalBool('is_active')),
-                    $v->optionalInt('sort_order', 0, 100000),
-                    $typeId, $ctx->environment, $ctx->cmpId,
-                ]);
+                $st->execute(array_merge(array_values($fields), [$typeId, $ctx->environment, $ctx->cmpId]));
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'code', 'A contract type with this code already exists.');
             }
-            $v->assert();
 
             $row = self::hydrateType($st->fetch() ?: []);
             (new AuditService($pdo))->logChanges(
@@ -390,15 +393,7 @@ final class SettingsController extends BaseController
         );
         $st->execute([$ctx->environment, $ctx->cmpId]);
 
-        Response::success(array_map(
-            static function (array $row): array {
-                $row['id']        = (int) $row['id'];
-                $row['is_active'] = ContractService::toBool($row['is_active']);
-
-                return $row;
-            },
-            $st->fetchAll() ?: []
-        ));
+        Response::success(array_map(self::hydrateDepartment(...), $st->fetchAll() ?: []));
     }
 
     public function storeDepartment(): void
@@ -406,11 +401,12 @@ final class SettingsController extends BaseController
         $ctx = $this->requirePermission(Permissions::SETTINGS_MANAGE);
 
         $this->respond(function () use ($ctx): array {
-            $pdo  = $this->db();
-            $v    = new Validator($this->body());
-            $name = $v->requiredString('name', 120);
-            $code = self::code($v, 'code');
-            $head = $v->optionalString('head_uuid', 64);
+            $pdo    = $this->db();
+            $v      = new Validator($this->body());
+            $name   = $v->requiredString('name', 120);
+            $code   = self::code($v, 'code');
+            $head   = $v->optionalString('head_uuid', 64);
+            $active = self::pgBool($v->optionalBool('is_active', true));
             $v->assert();
 
             $st = $pdo->prepare(
@@ -419,21 +415,16 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    $ctx->environment, $ctx->cmpId, $name, $code, $head,
-                    self::pgBool($v->optionalBool('is_active', true)),
-                ]);
+                $st->execute([$ctx->environment, $ctx->cmpId, $name, $code, $head, $active]);
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'code', 'A department with this code already exists.');
             }
 
-            $row = $st->fetch() ?: [];
+            $row = self::hydrateDepartment($st->fetch() ?: []);
             (new AuditService($pdo))->log($ctx, 'department', (int) ($row['id'] ?? 0), 'settings.department_created', null, [
                 'code' => ['from' => null, 'to' => $code],
                 'name' => ['from' => null, 'to' => $name],
             ]);
-
-            $row['is_active'] = ContractService::toBool($row['is_active'] ?? true);
 
             return $row;
         }, 201);
@@ -449,6 +440,14 @@ final class SettingsController extends BaseController
             $existing = $this->tenantRow($pdo, 'contract_departments', $ctx, $departmentId, 'Department not found.');
             $v        = new Validator($this->body());
 
+            $fields = [
+                'name'      => $v->optionalString('name', 120),
+                'code'      => self::code($v, 'code', false),
+                'head_uuid' => $v->optionalString('head_uuid', 64),
+                'is_active' => self::pgBool($v->optionalBool('is_active')),
+            ];
+            $v->assert();
+
             $st = $pdo->prepare(
                 'UPDATE contract_departments SET
                     name = COALESCE(?, name),
@@ -461,26 +460,17 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    $v->optionalString('name', 120),
-                    self::code($v, 'code', false),
-                    $v->optionalString('head_uuid', 64),
-                    self::pgBool($v->optionalBool('is_active')),
-                    $departmentId, $ctx->environment, $ctx->cmpId,
-                ]);
+                $st->execute(array_merge(array_values($fields), [$departmentId, $ctx->environment, $ctx->cmpId]));
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'code', 'A department with this code already exists.');
             }
-            $v->assert();
 
-            $row              = $st->fetch() ?: [];
-            $row['is_active'] = ContractService::toBool($row['is_active'] ?? true);
-
+            $row = self::hydrateDepartment($st->fetch() ?: []);
             (new AuditService($pdo))->logChanges(
                 $ctx,
                 'department',
                 $departmentId,
-                $existing,
+                self::hydrateDepartment($existing),
                 $row,
                 self::AUDITED_DEPARTMENT,
                 null,
@@ -551,9 +541,19 @@ final class SettingsController extends BaseController
                 $v->fail('field_key', 'Use a lowercase key starting with a letter, such as cost_centre.');
             }
 
-            $label = $v->requiredString('label', 160);
-            $type  = $v->requiredEnum('field_type', Enums::CUSTOM_FIELD_TYPES);
+            $label  = $v->requiredString('label', 160);
+            $type   = $v->requiredEnum('field_type', Enums::CUSTOM_FIELD_TYPES);
             $typeId = $v->optionalId('contract_type_id');
+
+            $fields = [
+                'options'       => self::jsonOrNull($v, 'options') ?? '[]',
+                'is_required'   => self::pgBool($v->optionalBool('is_required', false)),
+                'is_filterable' => self::pgBool($v->optionalBool('is_filterable', false)),
+                'help_text'     => $v->optionalString('help_text', 255),
+                'sort_order'    => $v->optionalInt('sort_order', 0, 100000, 100) ?? 100,
+                'is_active'     => self::pgBool($v->optionalBool('is_active', true)),
+            ];
+
             $this->requireOwnRow($pdo, $ctx, $v, 'contract_types', 'contract_type_id', $typeId);
             $v->assert();
 
@@ -566,19 +566,13 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    $ctx->environment, $ctx->cmpId, $key, $label, $type, $typeId,
-                    self::jsonOrNull($v, 'options') ?? '[]',
-                    self::pgBool($v->optionalBool('is_required', false)),
-                    self::pgBool($v->optionalBool('is_filterable', false)),
-                    $v->optionalString('help_text', 255),
-                    $v->optionalInt('sort_order', 0, 100000, 100) ?? 100,
-                    self::pgBool($v->optionalBool('is_active', true)),
-                ]);
+                $st->execute(array_merge(
+                    [$ctx->environment, $ctx->cmpId, $key, $label, $type, $typeId],
+                    array_values($fields)
+                ));
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'field_key', 'A custom field with this key already exists.');
             }
-            $v->assert();
 
             $row = self::hydrateCustomField($st->fetch() ?: []);
             (new AuditService($pdo))->log($ctx, 'custom_field', (int) ($row['id'] ?? 0), 'settings.custom_field_created', null, [
@@ -608,7 +602,20 @@ final class SettingsController extends BaseController
             $v        = new Validator($this->body());
 
             $typeId = $v->optionalId('contract_type_id');
+            $fields = [
+                'label'            => $v->optionalString('label', 160),
+                'field_type'       => $v->optionalEnum('field_type', Enums::CUSTOM_FIELD_TYPES),
+                'contract_type_id' => $typeId,
+                'options'          => self::jsonOrNull($v, 'options'),
+                'is_required'      => self::pgBool($v->optionalBool('is_required')),
+                'is_filterable'    => self::pgBool($v->optionalBool('is_filterable')),
+                'help_text'        => $v->optionalString('help_text', 255),
+                'sort_order'       => $v->optionalInt('sort_order', 0, 100000),
+                'is_active'        => self::pgBool($v->optionalBool('is_active')),
+            ];
+
             $this->requireOwnRow($pdo, $ctx, $v, 'contract_types', 'contract_type_id', $typeId);
+            $v->assert();
 
             $st = $pdo->prepare(
                 'UPDATE contract_custom_fields SET
@@ -625,19 +632,7 @@ final class SettingsController extends BaseController
                  WHERE id = ? AND environment = ? AND cmp_id = ?
                  RETURNING *'
             );
-            $st->execute([
-                $v->optionalString('label', 160),
-                $v->optionalEnum('field_type', Enums::CUSTOM_FIELD_TYPES),
-                $typeId,
-                self::jsonOrNull($v, 'options'),
-                self::pgBool($v->optionalBool('is_required')),
-                self::pgBool($v->optionalBool('is_filterable')),
-                $v->optionalString('help_text', 255),
-                $v->optionalInt('sort_order', 0, 100000),
-                self::pgBool($v->optionalBool('is_active')),
-                $fieldId, $ctx->environment, $ctx->cmpId,
-            ]);
-            $v->assert();
+            $st->execute(array_merge(array_values($fields), [$fieldId, $ctx->environment, $ctx->cmpId]));
 
             $row = self::hydrateCustomField($st->fetch() ?: []);
             (new AuditService($pdo))->logChanges(
@@ -753,8 +748,7 @@ final class SettingsController extends BaseController
         $pdo   = $this->db();
 
         // contract_tag_map cascades, so the assignments go with the tag. That is
-        // the intended meaning of deleting a label: no contract is otherwise
-        // changed by it.
+        // what deleting a label means; no contract is otherwise changed by it.
         $st = $pdo->prepare(
             'DELETE FROM contract_tags WHERE id = ? AND environment = ? AND cmp_id = ? RETURNING name'
         );
@@ -828,9 +822,9 @@ final class SettingsController extends BaseController
         $this->respond(function () use ($ctx): array {
             [$uuid, $slug] = $this->roleTarget();
 
-            // Removing the last administrator would leave the settings screen
+            // Removing the last administrator leaves the settings screen
             // reachable only by the company owner in Manage, which is not
-            // obvious from here and is a bad surprise to discover later.
+            // visible from here and is a bad thing to discover later.
             if ($slug === 'contract_admin') {
                 $admins = RoleService::usersWithRole($ctx->environment, $ctx->cmpId, 'contract_admin');
                 if (count($admins) <= 1 && in_array($uuid, $admins, true)) {
@@ -878,11 +872,25 @@ final class SettingsController extends BaseController
         $ctx = $this->requirePermission(Permissions::SETTINGS_MANAGE);
 
         $this->respond(function () use ($ctx): array {
-            $pdo = $this->db();
-            $v   = new Validator($this->body());
-
+            $pdo  = $this->db();
+            $v    = new Validator($this->body());
             $key  = self::ruleKey($v);
             $name = $v->requiredString('name', 200);
+
+            $fields = [
+                'description'      => $v->optionalText('description', 4000),
+                'risk_category'    => $v->requiredEnum('risk_category', Enums::RISK_CATEGORIES),
+                'severity'         => $v->optionalEnum('severity', Enums::RISK_SEVERITIES, 'medium') ?? 'medium',
+                'subject'          => $v->requiredEnum('subject', RiskEngine::SUBJECTS),
+                'operator'         => $v->requiredEnum('operator', RiskEngine::OPERATORS),
+                'value_text'       => $v->optionalText('value_text', 4000),
+                'value_numeric'    => $v->optionalDecimal('value_numeric'),
+                'value_list'       => self::jsonOrNull($v, 'value_list') ?? '[]',
+                'applies_to_types' => self::jsonOrNull($v, 'applies_to_types') ?? '[]',
+                'score_weight'     => $v->optionalInt('score_weight', 0, 100, 10) ?? 10,
+                'recommendation'   => $v->optionalText('recommendation', 4000),
+                'is_active'        => self::pgBool($v->optionalBool('is_active', true)),
+            ];
             $v->assert();
 
             $st = $pdo->prepare(
@@ -895,25 +903,13 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    $ctx->environment, $ctx->cmpId, $key, $name,
-                    $v->optionalText('description', 4000),
-                    $v->requiredEnum('risk_category', Enums::RISK_CATEGORIES),
-                    $v->optionalEnum('severity', Enums::RISK_SEVERITIES, 'medium') ?? 'medium',
-                    $v->requiredEnum('subject', RiskEngine::SUBJECTS),
-                    $v->requiredEnum('operator', RiskEngine::OPERATORS),
-                    $v->optionalText('value_text', 4000),
-                    $v->optionalDecimal('value_numeric'),
-                    self::jsonOrNull($v, 'value_list') ?? '[]',
-                    self::jsonOrNull($v, 'applies_to_types') ?? '[]',
-                    $v->optionalInt('score_weight', 0, 100, 10) ?? 10,
-                    $v->optionalText('recommendation', 4000),
-                    self::pgBool($v->optionalBool('is_active', true)),
-                ]);
+                $st->execute(array_merge(
+                    [$ctx->environment, $ctx->cmpId, $key, $name],
+                    array_values($fields)
+                ));
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'rule_key', 'A risk rule with this key already exists.');
             }
-            $v->assert();
 
             $row = self::hydrateRiskRule($st->fetch() ?: []);
             (new AuditService($pdo))->log($ctx, 'risk_rule', (int) ($row['id'] ?? 0), 'settings.risk_rule_created', null, [
@@ -934,6 +930,24 @@ final class SettingsController extends BaseController
             $pdo      = $this->db();
             $existing = $this->tenantRow($pdo, 'contract_risk_rules', $ctx, $ruleId, 'Risk rule not found.');
             $v        = new Validator($this->body());
+
+            $fields = [
+                'rule_key'         => self::ruleKey($v, false),
+                'name'             => $v->optionalString('name', 200),
+                'description'      => $v->optionalText('description', 4000),
+                'risk_category'    => $v->optionalEnum('risk_category', Enums::RISK_CATEGORIES),
+                'severity'         => $v->optionalEnum('severity', Enums::RISK_SEVERITIES),
+                'subject'          => $v->optionalEnum('subject', RiskEngine::SUBJECTS),
+                'operator'         => $v->optionalEnum('operator', RiskEngine::OPERATORS),
+                'value_text'       => $v->optionalText('value_text', 4000),
+                'value_numeric'    => $v->optionalDecimal('value_numeric'),
+                'value_list'       => self::jsonOrNull($v, 'value_list'),
+                'applies_to_types' => self::jsonOrNull($v, 'applies_to_types'),
+                'score_weight'     => $v->optionalInt('score_weight', 0, 100),
+                'recommendation'   => $v->optionalText('recommendation', 4000),
+                'is_active'        => self::pgBool($v->optionalBool('is_active')),
+            ];
+            $v->assert();
 
             $st = $pdo->prepare(
                 'UPDATE contract_risk_rules SET
@@ -957,27 +971,10 @@ final class SettingsController extends BaseController
             );
 
             try {
-                $st->execute([
-                    self::ruleKey($v, false),
-                    $v->optionalString('name', 200),
-                    $v->optionalText('description', 4000),
-                    $v->optionalEnum('risk_category', Enums::RISK_CATEGORIES),
-                    $v->optionalEnum('severity', Enums::RISK_SEVERITIES),
-                    $v->optionalEnum('subject', RiskEngine::SUBJECTS),
-                    $v->optionalEnum('operator', RiskEngine::OPERATORS),
-                    $v->optionalText('value_text', 4000),
-                    $v->optionalDecimal('value_numeric'),
-                    self::jsonOrNull($v, 'value_list'),
-                    self::jsonOrNull($v, 'applies_to_types'),
-                    $v->optionalInt('score_weight', 0, 100),
-                    $v->optionalText('recommendation', 4000),
-                    self::pgBool($v->optionalBool('is_active')),
-                    $ruleId, $ctx->environment, $ctx->cmpId,
-                ]);
+                $st->execute(array_merge(array_values($fields), [$ruleId, $ctx->environment, $ctx->cmpId]));
             } catch (PDOException $e) {
                 throw self::asDuplicate($e, 'rule_key', 'A risk rule with this key already exists.');
             }
-            $v->assert();
 
             $row = self::hydrateRiskRule($st->fetch() ?: []);
             (new AuditService($pdo))->logChanges(
@@ -1037,9 +1034,10 @@ final class SettingsController extends BaseController
     {
         $this->requirePermission(Permissions::CONTRACT_VIEW);
 
-        $drive = Env::get('DRIVE_API_BASE') !== '';
-        $local = Env::bool('CONTRACTS_ALLOW_LOCAL_STORAGE');
-        $email = Env::bool('CONTRACTS_EMAIL_ENABLED');
+        $drive     = Env::get('DRIVE_API_BASE') !== '';
+        $local     = Env::bool('CONTRACTS_ALLOW_LOCAL_STORAGE');
+        $email     = Env::bool('CONTRACTS_EMAIL_ENABLED');
+        $signature = Env::get('SIGNATURE_PROVIDER') !== '';
 
         Response::success([
             'manage' => [
@@ -1061,11 +1059,11 @@ final class SettingsController extends BaseController
             ],
             'console' => [
                 'configured' => Env::get('CONSOLE_API_URL') !== '' && Env::get('CONSOLE_SERVICE_KEY') !== '',
-                'detail'     => 'AI provider credentials are issued by Console; they are never stored here.',
+                'detail'     => 'AI provider credentials are issued by Console and are never stored here.',
             ],
             'signature' => [
-                'configured' => Env::get('SIGNATURE_PROVIDER') !== '',
-                'detail'     => Env::get('SIGNATURE_PROVIDER') !== ''
+                'configured' => $signature,
+                'detail'     => $signature
                     ? 'An external signature provider is configured.'
                     : 'No signature provider configured. Contracts can still record an externally signed copy.',
             ],
@@ -1108,10 +1106,10 @@ final class SettingsController extends BaseController
         $ctx = $this->requirePermission(Permissions::CONTRACT_VIEW);
 
         $this->respond(function () use ($ctx): array {
-            $pdo   = $this->db();
-            $v     = new Validator($this->body());
-            $name  = $v->requiredString('name', 120);
-            $scope = $v->optionalEnum('scope', self::VIEW_SCOPES, 'repository') ?? 'repository';
+            $pdo     = $this->db();
+            $v       = new Validator($this->body());
+            $name    = $v->requiredString('name', 120);
+            $scope   = $v->optionalEnum('scope', self::VIEW_SCOPES, 'repository') ?? 'repository';
             $shared  = $v->optionalBool('is_shared', false) ?? false;
             $default = $v->optionalBool('is_default', false) ?? false;
             $filters = $v->optionalObject('filters');
@@ -1120,7 +1118,7 @@ final class SettingsController extends BaseController
 
             return Database::transaction($pdo, function (PDO $pdo) use ($ctx, $name, $scope, $shared, $default, $filters, $columns): array {
                 // Saving over a name the owner already used updates that view
-                // rather than failing: "save" on a screen the user is already
+                // rather than failing: "save" on the screen someone is already
                 // looking at means "keep what I have now".
                 $st = $pdo->prepare(
                     'INSERT INTO contract_saved_views
@@ -1147,10 +1145,10 @@ final class SettingsController extends BaseController
                     $pdo->prepare(
                         'UPDATE contract_saved_views SET is_default = FALSE
                          WHERE environment = ? AND cmp_id = ? AND owner_uuid = ? AND scope = ? AND id <> ?'
-                    )->execute([$ctx->environment, $ctx->cmpId, $ctx->uuid, $scope, (int) $row['id']]);
+                    )->execute([$ctx->environment, $ctx->cmpId, $ctx->uuid, $scope, (int) ($row['id'] ?? 0)]);
                 }
 
-                (new AuditService($pdo))->log($ctx, 'saved_view', (int) $row['id'], 'settings.saved_view_saved', null, [
+                (new AuditService($pdo))->log($ctx, 'saved_view', (int) ($row['id'] ?? 0), 'settings.saved_view_saved', null, [
                     'name'  => ['from' => null, 'to' => $name],
                     'scope' => ['from' => null, 'to' => $scope],
                 ]);
@@ -1245,8 +1243,8 @@ final class SettingsController extends BaseController
     /**
      * One configuration row, confirmed to belong to this company.
      *
-     * The table name is a literal written here, never caller input; the only
-     * caller value in the statement is the bound id.
+     * The table name is a literal written in this file, never caller input; the
+     * only caller value in the statement is the bound id.
      *
      * @return array<string,mixed>
      */
@@ -1294,8 +1292,8 @@ final class SettingsController extends BaseController
 
     /**
      * A seeded row is restored by CompanyBootstrapService the next time anyone
-     * opens Contracts, so deleting one produces a row that reappears. Saying no
-     * is kinder than that.
+     * opens Contracts, so deleting one produces a row that comes back. Saying
+     * no is kinder than that.
      *
      * @param array<string,mixed> $row
      */
@@ -1434,9 +1432,9 @@ final class SettingsController extends BaseController
     /**
      * A PHP bool as PostgreSQL sees it.
      *
-     * Passed as text with an explicit cast in the statement rather than bound
-     * as a bool: PDO's boolean binding differs between drivers, and a settings
-     * flag that silently becomes false is not a bug anyone would look for.
+     * Passed as text against an explicit cast in the statement rather than
+     * bound as a bool: PDO's boolean binding differs between drivers, and a
+     * settings flag that silently becomes false is not a bug anyone looks for.
      */
     private static function pgBool(?bool $value): ?string
     {
@@ -1505,6 +1503,19 @@ final class SettingsController extends BaseController
         }
         $row['required_fields']   = self::decode($row['required_fields'] ?? null, []);
         $row['mandatory_clauses'] = self::decode($row['mandatory_clauses'] ?? null, []);
+
+        return $row;
+    }
+
+    /** @param array<string,mixed> $row @return array<string,mixed> */
+    private static function hydrateDepartment(array $row): array
+    {
+        if (array_key_exists('is_active', $row)) {
+            $row['is_active'] = ContractService::toBool($row['is_active']);
+        }
+        if (isset($row['id'])) {
+            $row['id'] = (int) $row['id'];
+        }
 
         return $row;
     }

@@ -829,7 +829,7 @@ final class DocumentService
             return $version;
         }
 
-        return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $versionId, $version): array {
+        return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $versionId, $version, $note): array {
             $documentId = (int) $version['document_id'];
 
             $pdo->prepare(

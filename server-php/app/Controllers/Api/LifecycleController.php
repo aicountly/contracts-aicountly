@@ -9,6 +9,7 @@ use App\Core\Response;
 use App\Services\AmendmentService;
 use App\Services\RenewalService;
 use App\Services\TerminationService;
+use App\Support\Enums;
 use App\Support\Permissions;
 
 /**
@@ -73,6 +74,69 @@ final class LifecycleController extends BaseController
     }
 
     // --- Amendments ---------------------------------------------------------
+
+    /**
+     * The amendment register — every amendment across the portfolio.
+     *
+     * Joined to the contract because the question this screen answers is "what
+     * has been changed, and to what", not "what has changed about this one
+     * agreement" — that is the contract's own Amendments tab.
+     */
+    public function amendmentRegister(): void
+    {
+        $ctx  = $this->requirePermission(Permissions::CONTRACT_VIEW);
+        $page = Request::pagination(25, 100);
+        $pdo  = $this->db();
+
+        $clauses = ['a.environment = :env', 'a.cmp_id = :cmp', 'c.archived_at IS NULL'];
+        $params  = ['env' => $ctx->environment, 'cmp' => $ctx->cmpId];
+
+        $status = Enums::coerce(Request::query('status'), Enums::AMENDMENT_STATUSES);
+        if ($status !== null) {
+            $clauses[]        = 'a.status = :status';
+            $params['status'] = $status;
+        }
+
+        $contractId = Request::query('contract_id');
+        if ($contractId !== null && ctype_digit($contractId)) {
+            $clauses[]             = 'a.contract_id = :contract_id';
+            $params['contract_id'] = (int) $contractId;
+        }
+
+        if (! $ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
+            $clauses[]       = '(c.owner_uuid = :self OR c.created_by = :self2)';
+            $params['self']  = $ctx->uuid;
+            $params['self2'] = $ctx->uuid;
+        }
+
+        $where = 'WHERE ' . implode(' AND ', $clauses);
+
+        $countSt = $pdo->prepare(
+            "SELECT COUNT(*) FROM contract_amendments a JOIN contracts c ON c.id = a.contract_id {$where}"
+        );
+        $countSt->execute($params);
+        $total = (int) $countSt->fetchColumn();
+
+        $st = $pdo->prepare(
+            "SELECT a.id, a.uuid, a.contract_id, a.amendment_no, a.title, a.description,
+                    a.effective_date, a.execution_date, a.status, a.applied_at, a.created_at,
+                    c.contract_number, c.title AS contract_title, c.counterparty_name,
+                    c.status AS contract_status
+             FROM contract_amendments a
+             JOIN contracts c ON c.id = a.contract_id
+             {$where}
+             ORDER BY a.effective_date DESC NULLS LAST, a.id DESC
+             LIMIT :lim OFFSET :off"
+        );
+        foreach ($params as $key => $value) {
+            $st->bindValue($key, $value, is_int($value) ? \PDO::PARAM_INT : \PDO::PARAM_STR);
+        }
+        $st->bindValue(':lim', $page['per_page'], \PDO::PARAM_INT);
+        $st->bindValue(':off', $page['offset'], \PDO::PARAM_INT);
+        $st->execute();
+
+        Response::paginated($st->fetchAll() ?: [], $total, $page['page'], $page['per_page']);
+    }
 
     public function amendmentsForContract(?string $id = null): void
     {
