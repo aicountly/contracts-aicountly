@@ -79,7 +79,7 @@ final class NotificationService
             return null;
         }
 
-        $severity = in_array($opts['severity'] ?? 'info', self::SEVERITIES, true)
+        $severity = isset($opts['severity']) && in_array($opts['severity'], self::SEVERITIES, true)
             ? (string) $opts['severity']
             : 'info';
 

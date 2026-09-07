@@ -409,8 +409,10 @@ final class DiffService
             return null;
         }
 
-        $diff  = self::decodeJson($row['diff_json']);
-        $stats = self::decodeJson($row['stats_json']);
+        $diff     = self::decodeJson($row['diff_json']);
+        $stats    = self::decodeJson($row['stats_json']);
+        $segments = is_array($diff['segments'] ?? null) ? $diff['segments'] : [];
+        $changes  = is_array($diff['changes'] ?? null) ? $diff['changes'] : [];
 
         return [
             'id'                => (int) $row['id'],
@@ -427,8 +429,12 @@ final class DiffService
                 'filename'   => $row['target_filename'],
                 'status'     => $row['target_version_status'],
             ],
-            'segments'       => is_array($diff['segments'] ?? null) ? $diff['segments'] : [],
-            'changes'        => is_array($diff['changes'] ?? null) ? $diff['changes'] : [],
+            'segments'       => self::forDisplay($segments),
+            'changes'        => $changes,
+            // API_CONTRACT.md names this list `classified` and the comparison
+            // screen reads it under that name. It is the same array under both
+            // spellings rather than two lists, so they cannot drift apart.
+            'classified'     => $changes,
             'mode'           => (string) ($diff['mode'] ?? 'lcs'),
             'truncated'      => (bool) ($diff['truncated'] ?? false),
             'stats'          => $stats,
@@ -946,6 +952,47 @@ final class DiffService
             // is a sentence a reviewer can act on.
             'similarity' => $total === 0 ? 1.0 : round((2 * $common) / $total, 4),
         ];
+    }
+
+    /**
+     * The stored segment, plus the field names the comparison screen reads.
+     *
+     * The engine's own spelling is `base` and `target` — the two sides of a
+     * paragraph — while the viewer renders `text` for a one-sided run and
+     * `base_text`/`target_text` for a rewrite, because the AI commentary path
+     * hands it segments in that shape too. The alias is added on the way out
+     * rather than on the way in: a redline is stored once and read many times,
+     * and a second copy of every clause would be paid for in the JSONB column
+     * forever.
+     *
+     * @param list<array<string,mixed>> $segments
+     * @return list<array<string,mixed>>
+     */
+    private static function forDisplay(array $segments): array
+    {
+        $out = [];
+
+        foreach ($segments as $segment) {
+            if (! is_array($segment)) {
+                continue;
+            }
+
+            $base   = (string) ($segment['base'] ?? '');
+            $target = (string) ($segment['target'] ?? '');
+
+            $segment['base_text']   = $base;
+            $segment['target_text'] = $target;
+
+            // A rewrite has no single text and the viewer draws it from both
+            // sides; leaving the key off is what tells it so.
+            if (($segment['type'] ?? '') !== 'replace') {
+                $segment['text'] = $base !== '' ? $base : $target;
+            }
+
+            $out[] = $segment;
+        }
+
+        return $out;
     }
 
     /** @param array<string,mixed> $segment @return array<string,mixed> */
