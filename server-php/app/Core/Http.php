@@ -16,6 +16,9 @@ final class Http
     /** @var callable(string,string,array<int,string>,?string,int,int):array{status:int,body:string,content_type:string,error:string}|null */
     private static $transportForTests = null;
 
+    /** @var (callable(string):array<int,string>)|null */
+    private static $resolverForTests = null;
+
     /**
      * @param array<int,string> $headers
      * @return array{status: int, body: string, content_type: string, error: string}
@@ -26,7 +29,8 @@ final class Http
         array $headers = [],
         ?string $body = null,
         int $timeout = 15,
-        int $connectTimeout = 5
+        int $connectTimeout = 5,
+        ?int $maxResponseBytes = null
     ): array {
         if (self::$transportForTests !== null) {
             return (self::$transportForTests)($method, $url, $headers, $body, $timeout, $connectTimeout);
@@ -61,6 +65,28 @@ final class Http
             $options[CURLOPT_POSTFIELDS] = $body ?? '';
         }
 
+        // A caller with a budget gets the body streamed through this callback
+        // instead of CURLOPT_RETURNTRANSFER's whole-response buffer. Returning
+        // a short count is libcurl's own signal to abort mid-transfer, so an
+        // oversized response is cut off on the wire rather than fully read into
+        // memory only to be discarded by a length check after curl_exec returns.
+        $chunks     = [];
+        $received   = 0;
+        $overBudget = false;
+        if ($maxResponseBytes !== null) {
+            $options[CURLOPT_WRITEFUNCTION] = static function ($ch, string $chunk) use (&$chunks, &$received, &$overBudget, $maxResponseBytes): int {
+                $received += strlen($chunk);
+                if ($received > $maxResponseBytes) {
+                    $overBudget = true;
+
+                    return 0;
+                }
+                $chunks[] = $chunk;
+
+                return strlen($chunk);
+            };
+        }
+
         curl_setopt_array($ch, $options);
 
         $raw         = curl_exec($ch);
@@ -69,13 +95,17 @@ final class Http
         $error       = curl_error($ch);
         curl_close($ch);
 
+        if ($overBudget) {
+            return ['status' => 0, 'body' => '', 'content_type' => '', 'error' => 'Response exceeded the configured size limit.'];
+        }
+
         if ($raw === false) {
             return ['status' => 0, 'body' => '', 'content_type' => '', 'error' => $error !== '' ? $error : 'transport failure'];
         }
 
         return [
             'status'       => $status,
-            'body'         => (string) $raw,
+            'body'         => $maxResponseBytes !== null ? implode('', $chunks) : (string) $raw,
             'content_type' => $contentType !== '' ? $contentType : 'application/json',
             'error'        => '',
         ];
@@ -135,7 +165,7 @@ final class Http
         // allowed — a DNS failure is not evidence that a destination is safe.
         $addresses = filter_var($host, FILTER_VALIDATE_IP) !== false
             ? [$host]
-            : (gethostbynamel($host) ?: []);
+            : self::resolveAddresses($host);
 
         if ($addresses === [] && ! in_array($host, ['localhost', 'localhost.localdomain'], true)) {
             return false;
@@ -172,6 +202,38 @@ final class Http
         return Env::bool('ALLOW_LOOPBACK_INTEGRATIONS', false);
     }
 
+    /**
+     * All addresses a hostname resolves to — A and AAAA both.
+     *
+     * gethostbynamel() alone is AF_INET only: it silently drops every AAAA
+     * record. curl resolves the same name with getaddrinfo() and will connect
+     * over whichever family the OS prefers, so an isSafeUrl() that vetted only
+     * the A records would wave through a host whose public A record passes
+     * and whose AAAA record is loopback or link-local — the guard and the
+     * actual connection would not be looking at the same address.
+     *
+     * @return array<int,string>
+     */
+    private static function resolveAddresses(string $host): array
+    {
+        if (self::$resolverForTests !== null) {
+            return (self::$resolverForTests)($host);
+        }
+
+        $addresses = gethostbynamel($host) ?: [];
+
+        $aaaa = @dns_get_record($host, DNS_AAAA);
+        if (is_array($aaaa)) {
+            foreach ($aaaa as $record) {
+                if (isset($record['ipv6']) && is_string($record['ipv6'])) {
+                    $addresses[] = $record['ipv6'];
+                }
+            }
+        }
+
+        return $addresses;
+    }
+
     private static function isLoopbackIp(string $ip): bool
     {
         if ($ip === '::1') {
@@ -185,16 +247,57 @@ final class Http
     /** Private, reserved, link-local, multicast — anything not routable on the internet. */
     private static function isNonPublicIp(string $ip): bool
     {
-        return filter_var(
+        if (filter_var(
             $ip,
             FILTER_VALIDATE_IP,
             FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-        ) === false;
+        ) === false) {
+            return true;
+        }
+
+        // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) embed an IPv4 address in
+        // their low bits. filter_var's reserved-range table does not know
+        // either prefix, so a mapped 169.254.169.254 reads as a public IPv6
+        // address unless the embedded address is pulled out and checked too.
+        $embedded = self::embeddedIpv4($ip);
+
+        return $embedded !== null && self::isNonPublicIp($embedded);
+    }
+
+    /** Trailing IPv4 address embedded in a NAT64 or 6to4 IPv6 address, or null if $ip is neither. */
+    private static function embeddedIpv4(string $ip): ?string
+    {
+        $packed = @inet_pton($ip);
+        if ($packed === false || strlen($packed) !== 16) {
+            return null;
+        }
+
+        $nat64Prefix = inet_pton('64:ff9b::');
+        if ($nat64Prefix !== false && substr($packed, 0, 12) === substr($nat64Prefix, 0, 12)) {
+            $embedded = inet_ntop(substr($packed, 12, 4));
+
+            return $embedded === false ? null : $embedded;
+        }
+
+        $sixToFourPrefix = inet_pton('2002::');
+        if ($sixToFourPrefix !== false && substr($packed, 0, 2) === substr($sixToFourPrefix, 0, 2)) {
+            $embedded = inet_ntop(substr($packed, 2, 4));
+
+            return $embedded === false ? null : $embedded;
+        }
+
+        return null;
     }
 
     /** @internal tests only @param callable|null $transport */
     public static function setTransportForTests(?callable $transport): void
     {
         self::$transportForTests = $transport;
+    }
+
+    /** @internal tests only @param (callable(string):array<int,string>)|null $resolver */
+    public static function setResolverForTests(?callable $resolver): void
+    {
+        self::$resolverForTests = $resolver;
     }
 }

@@ -8,6 +8,7 @@ use App\Core\Database;
 use App\Support\Dates;
 use App\Support\DomainException;
 use App\Support\Enums;
+use App\Support\Permissions;
 use App\Support\TenantContext;
 use App\Support\ValidationFailed;
 use App\Support\Validator;
@@ -47,6 +48,18 @@ final class AmendmentService
 
     /** Statuses an amendment can still be edited in. */
     private const EDITABLE_STATUSES = ['draft', 'under_review', 'awaiting_approval', 'awaiting_signature'];
+
+    /**
+     * The AMENDABLE fields that also require COMMERCIALS_EDIT to write.
+     *
+     * Deliberately the same set ContractService::update() restores to their
+     * existing values for a caller without that permission: an amendment is
+     * another way to change a contract's columns, not a side door around the
+     * split that governs every other one. `commercial_summary` stays out of
+     * this list on purpose, matching that same gate — it is prose about the
+     * deal, not a figure.
+     */
+    private const COMMERCIAL_FIELDS = ['currency', 'total_value', 'recurring_value', 'payment_frequency', 'billing_frequency'];
 
     private AuditService $audit;
 
@@ -362,6 +375,17 @@ final class AmendmentService
             throw DomainException::conflict(
                 'This amendment does not change any contract field.',
                 'AMENDMENT_EMPTY'
+            );
+        }
+
+        // amendment.manage lets a role draft and apply amendments; it says
+        // nothing about commercial terms specifically. Without this, applying
+        // (rather than editing) was a side door onto currency/total_value/etc.
+        // for a role — legal holds amendment.manage but not commercials.edit —
+        // that the direct contract edit already refuses those columns to.
+        if (array_intersect(array_keys($changes), self::COMMERCIAL_FIELDS) !== [] && ! $ctx->has(Permissions::COMMERCIALS_EDIT)) {
+            throw DomainException::forbidden(
+                'This amendment changes commercial terms. Applying it needs the commercials permission.'
             );
         }
 

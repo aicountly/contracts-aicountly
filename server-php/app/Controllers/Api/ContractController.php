@@ -34,6 +34,10 @@ final class ContractController extends BaseController
             $page['offset']
         ));
 
+        if (! $ctx->has(Permissions::COMMERCIALS_VIEW)) {
+            $result['items'] = array_map(self::stripCommercials(...), $result['items']);
+        }
+
         Response::paginated($result['items'], $result['total'], $page['page'], $page['per_page']);
     }
 
@@ -62,13 +66,7 @@ final class ContractController extends BaseController
         $contract['tabs'] = $this->tabCounts($ctx, $contractId);
 
         if (! $ctx->has(Permissions::COMMERCIALS_VIEW)) {
-            // Commercial figures are a separate grant. Leaving them in the
-            // payload and hiding them client-side would put the numbers in the
-            // browser's network tab for anyone who looks.
-            foreach (['total_value', 'recurring_value', 'commercial_summary'] as $field) {
-                $contract[$field] = null;
-            }
-            $contract['commercials_hidden'] = true;
+            $contract = self::stripCommercials($contract);
         }
 
         Response::success($contract);
@@ -379,5 +377,28 @@ final class ContractController extends BaseController
     private function service(): ContractService
     {
         return new ContractService($this->db());
+    }
+
+    /**
+     * Null out commercial figures for a caller without contract.commercials.view.
+     *
+     * Shared by every action that can hand back a contract row, list or
+     * single. Commercial values are removed from the payload, not hidden
+     * client-side (docs/SECURITY.md) — a rule enforced in one place is a rule
+     * that cannot be forgotten on the next endpoint that returns a row.
+     *
+     * @param array<string,mixed> $contract
+     * @return array<string,mixed>
+     */
+    private static function stripCommercials(array $contract): array
+    {
+        foreach (['total_value', 'recurring_value', 'commercial_summary'] as $field) {
+            if (array_key_exists($field, $contract)) {
+                $contract[$field] = null;
+            }
+        }
+        $contract['commercials_hidden'] = true;
+
+        return $contract;
     }
 }

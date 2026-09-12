@@ -58,7 +58,11 @@ final class PromptGuard
         // The reverse word order: "your previous instructions are void".
         '/\b(?:previous|prior|above|system)\b[ \t]*(?:instructions|prompt)\b[^.\n]{0,30}?\b(?:void|cancelled|canceled|no longer apply|superseded|revoked)\b/i',
         // A line that impersonates a turn: "System:", "### Assistant:", "[USER]:".
-        '/^[ \t]{0,3}(?:#{1,6}[ \t]*)?[\[<\*"\']{0,2}(?:system|assistant|user|human|developer|ai)[\]>\*"\']{0,2}[ \t]*:/im',
+        // Indentation is unbounded rather than capped at three spaces: the
+        // whitespace collapse above rewrites any longer run to exactly four
+        // spaces, and a cap the guard's own normalisation can exceed is not a
+        // cap at all.
+        '/^[ \t]*(?:#{1,6}[ \t]*)?[\[<\*"\']{0,2}(?:system|assistant|user|human|developer|ai)[\]>\*"\']{0,2}[ \t]*:/im',
         // XML-ish and chat-template role tags.
         '/<\/?\s*(?:system|assistant|user|human|developer)(?:[_-][a-z]+)?\s*>/i',
         '/<\|[a-z0-9_]{1,32}\|>/i',
@@ -121,6 +125,13 @@ final class PromptGuard
         $text = str_replace(["\r\n", "\r"], "\n", $text);
         $text = preg_replace('/[^\P{C}\n\t]+/u', '', $text) ?? $text;
 
+        // A non-breaking space or an en/em space reads as whitespace to a person
+        // but not to the `[ \t]` classes below, so a role header indented with
+        // one would clear every ASCII-only check that follows. Folding these to
+        // a plain space first means the collapse below and the injection
+        // patterns both see it.
+        $text = preg_replace('/[\p{Zs}\x{FEFF}\x{2028}\x{2029}]/u', ' ', $text) ?? $text;
+
         $text = preg_replace('/[ \t]{5,}/', '    ', $text) ?? $text;
         $text = preg_replace('/\n{4,}/', "\n\n\n", $text) ?? $text;
 
@@ -133,7 +144,7 @@ final class PromptGuard
 
         $text = trim($text);
 
-        $limit = max(200, $maxChars);
+        $limit = $maxChars > 0 ? $maxChars : self::MAX_DOCUMENT_CHARS;
         if (mb_strlen($text) > $limit) {
             $original = mb_strlen($text);
             $text     = rtrim(mb_substr($text, 0, $limit))

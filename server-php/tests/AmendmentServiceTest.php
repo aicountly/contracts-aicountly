@@ -14,6 +14,8 @@ require_once __DIR__ . '/bootstrap.php';
 use App\Services\AmendmentService;
 use App\Services\RenewalService;
 use App\Support\Dates;
+use App\Support\DomainException;
+use App\Support\Permissions;
 
 $pdo = t_database();
 if ($pdo === null) {
@@ -288,5 +290,66 @@ assert_throws(
     'nor apply one',
     'not found'
 );
+
+// --- applying an amendment cannot be used to bypass commercials.edit --------
+// legal holds amendment.manage but not contract.commercials.edit — the same
+// split ContractService::update enforces on a direct PUT. Applying an
+// amendment that touches a commercial column must refuse just as directly,
+// not quietly write it through amendment.manage.
+$legalCtx   = t_context(permissions: Permissions::forRoles(['legal']), roles: ['legal']);
+$financeCtx = t_context(permissions: Permissions::forRoles(['finance']), roles: ['finance']);
+
+$commercialContractId = $makeContract();
+$commercialAmendment  = $service->create($legalCtx, $commercialContractId, [
+    'title'           => 'Fee revision',
+    'effective_date'  => '2026-06-01',
+    'affected_fields' => ['total_value' => '1.00', 'currency' => 'USD'],
+]);
+
+assert_throws(
+    static fn () => $service->apply($legalCtx, (int) $commercialAmendment['id']),
+    'a role without commercials.edit cannot apply an amendment that changes commercial terms',
+    'commercials permission'
+);
+
+$untouched = $pdo->query(
+    "SELECT total_value, currency FROM contracts WHERE id = {$commercialContractId}"
+)->fetch();
+assert_same('100000.00', $untouched['total_value'], 'the refused apply left total_value untouched');
+assert_same('INR', $untouched['currency'], 'and left currency untouched');
+assert_same(
+    'draft',
+    $service->find($legalCtx, (int) $commercialAmendment['id'])['status'],
+    'the amendment itself stays a draft, not silently marked executed'
+);
+
+try {
+    $service->apply($legalCtx, (int) $commercialAmendment['id']);
+    t_fail('the refusal is a permission error, not a generic conflict', 'expected a throw');
+} catch (DomainException $e) {
+    assert_same('PERMISSION_DENIED', $e->errorCode, 'the refusal is a permission error, not a generic conflict');
+    assert_same(403, $e->status, 'and answers with 403');
+}
+
+// A role with amendment.manage can still apply amendments that leave
+// commercial terms alone — the gate is on the fields, not the action.
+$nonCommercialAmendment = $service->create($legalCtx, $commercialContractId, [
+    'title'           => 'Governing law change',
+    'effective_date'  => '2026-06-01',
+    'affected_fields' => ['governing_law' => 'English law'],
+]);
+$appliedByLegal = $service->apply($legalCtx, (int) $nonCommercialAmendment['id']);
+assert_same('executed', $appliedByLegal['status'], 'legal can still apply an amendment that only changes non-commercial fields');
+
+// A role with commercials.edit (but not amendment.manage, in practice — the
+// service itself does not check amendment.manage, only the controller route
+// does) can apply the commercial change the direct route also allows it.
+$appliedByFinance = $service->apply($financeCtx, (int) $commercialAmendment['id']);
+assert_same('executed', $appliedByFinance['status'], 'a caller with commercials.edit can apply the same amendment');
+$afterFinance = $pdo->query(
+    "SELECT total_value, currency FROM contracts WHERE id = {$commercialContractId}"
+)->fetch();
+assert_same('1.00', $afterFinance['total_value'], 'commercials.edit lets the commercial value through');
+assert_same('USD', $afterFinance['currency'], 'and the currency with it');
 
 t_done('AmendmentServiceTest');

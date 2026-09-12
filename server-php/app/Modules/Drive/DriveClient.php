@@ -225,11 +225,13 @@ final class DriveClient
      *
      * Capped, because the only callers are text extraction and checksum
      * verification and both would rather fail than pull an unbounded body into
-     * a PHP-FPM worker's memory.
+     * a PHP-FPM worker's memory. The cap is enforced by Http::request() itself,
+     * mid-transfer — an object larger than $maxBytes never gets fully buffered
+     * in the first place, whatever its real size turns out to be.
      */
     public function fetchBytes(string $url, int $maxBytes): ?string
     {
-        $result = Http::request('GET', $url, [], null, 60, 10);
+        $result = Http::request('GET', $url, [], null, 60, 10, $maxBytes);
 
         if ($result['status'] < 200 || $result['status'] >= 300) {
             return null;

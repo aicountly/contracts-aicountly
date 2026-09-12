@@ -137,6 +137,22 @@ final class TerminationService
         $fields = $this->readFields(new Validator($body), $ctx);
 
         return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $contractId, $fields): array {
+            // Re-checked under the transaction, with the contract row locked:
+            // the check above ran before the transaction opened, so two
+            // creates racing each other would otherwise both pass it and
+            // leave the contract with two open terminations, each with its
+            // own notice date and settlement, and nothing downstream able to
+            // tell which is real.
+            $pdo->prepare('SELECT id FROM contracts WHERE id = ? AND environment = ? AND cmp_id = ? FOR UPDATE')
+                ->execute([$contractId, $ctx->environment, $ctx->cmpId]);
+
+            if ($this->openTerminationId($ctx, $contractId) !== null) {
+                throw DomainException::conflict(
+                    'This contract already has a termination in progress.',
+                    'TERMINATION_IN_PROGRESS'
+                );
+            }
+
             $st = $pdo->prepare(
                 'INSERT INTO contract_terminations
                  (environment, cmp_id, contract_id, termination_type, reason, initiating_party,

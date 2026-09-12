@@ -34,9 +34,12 @@ t_reset_database($pdo);
 $admin  = t_context(1, 'ADMIN-ALICE');
 $engine = new RiskEngine($pdo);
 
+// Owned by OWNER-DAN: findingById() is ContractVisibility-scoped, so the
+// contract.edit assertion below needs a caller who can see this contract at
+// all, not just one who holds the permission.
 $st = $pdo->prepare(
-    "INSERT INTO contracts (environment, cmp_id, contract_number, title, status, lifecycle_stage, currency)
-     VALUES ('sandbox', 1, 'CON-2026-000001', 'Uploaded agreement, nothing captured', 'draft', 'draft', 'INR')
+    "INSERT INTO contracts (environment, cmp_id, contract_number, title, status, lifecycle_stage, currency, owner_uuid, created_by)
+     VALUES ('sandbox', 1, 'CON-2026-000001', 'Uploaded agreement, nothing captured', 'draft', 'draft', 'INR', 'OWNER-DAN', 'OWNER-DAN')
      RETURNING id"
 );
 $st->execute();

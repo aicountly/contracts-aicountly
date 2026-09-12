@@ -20,6 +20,7 @@ use App\Services\CompanyBootstrapService;
 use App\Services\HealthScoreService;
 use App\Services\RiskEngine;
 use App\Support\Dates;
+use App\Support\Permissions;
 
 // ---------------------------------------------------------------------------
 // Fixtures for the pure half
@@ -811,5 +812,44 @@ assert_true(
     in_array('no_document', r_keys($engine->assess($ctx1, $empty)), true),
     'and company 1 never noticed'
 );
+
+// ---------------------------------------------------------------------------
+// Visibility narrows within one company too, not only across the tenant
+// boundary: a user who cannot see the contract at all (GET .../risk 404s
+// them) must not be able to reach or review its findings by finding id.
+// ---------------------------------------------------------------------------
+
+$ownedByA    = r_contract($pdo, 1, 'CON-2026-000099', ['title' => 'USER-A\'s private contract']);
+$aAssessment = $engine->assess($ctx1, $ownedByA);
+$aFinding    = (int) $aAssessment['findings'][0]['id'];
+
+$narrowedPerms = Permissions::forRoles(['contract_owner']);
+$narrowed      = t_context(1, 'USER-C', $narrowedPerms, 'sandbox', ['contract_owner']);
+assert_false(
+    $narrowed->has(Permissions::CONTRACT_VIEW_ALL),
+    'contract_owner does not hold view_all, so it is a visibility-narrowed role'
+);
+assert_true(
+    $narrowed->has(Permissions::CONTRACT_EDIT),
+    'contract_owner does hold contract.edit, which is what reviewFinding() gates on'
+);
+
+assert_throws(
+    static fn () => $engine->reviewFinding($narrowed, $aFinding, 'accepted'),
+    'a same-company user who neither owns, created, nor approves the contract cannot review its finding',
+    'Risk finding not found'
+);
+
+$findingRow = $pdo->prepare('SELECT review_status, reviewed_by FROM contract_risk_findings WHERE id = ?');
+$findingRow->execute([$aFinding]);
+$untouched = $findingRow->fetch();
+assert_same('open', $untouched['review_status'], 'the refused call left the finding exactly as it was');
+assert_null($untouched['reviewed_by'], 'and recorded no reviewer');
+
+// Once USER-C is actually the contract's owner, the same call succeeds: the
+// fix narrows by visibility, it does not blanket-deny contract_owner.
+$pdo->prepare('UPDATE contracts SET owner_uuid = ? WHERE id = ?')->execute(['USER-C', $ownedByA]);
+$asOwner = $engine->reviewFinding($narrowed, $aFinding, 'accepted');
+assert_same('accepted', $asOwner['review_status'], 'the contract\'s own owner may still review its findings');
 
 t_done('RiskEngineTest');

@@ -145,7 +145,14 @@ final class DocumentController extends BaseController
         $ctx       = $this->requirePermission(Permissions::DOCUMENT_UPLOAD);
         $sessionId = $this->intId($id);
 
-        $this->respond(fn () => $this->documents()->completeUpload($ctx, $sessionId));
+        // Present only on the local-storage fallback: a Drive session is told
+        // the transfer finished with no body at all, since the bytes went
+        // straight to Drive and never passed through this process. Read
+        // directly rather than through Request::jsonBody(), which decodes JSON
+        // and would discard a raw file body instead of returning it.
+        $bytes = (string) file_get_contents('php://input');
+
+        $this->respond(fn () => $this->documents()->completeUpload($ctx, $sessionId, $bytes === '' ? null : $bytes));
     }
 
     public function finalizeUpload(?string $id = null): void
@@ -221,8 +228,8 @@ final class DocumentController extends BaseController
             }
 
             try {
-                $this->storeLocally($ctx, $sessionId, $session, $file['tmp_name']);
-                $documents->completeUpload($ctx, $sessionId);
+                $bytes = $this->readDirectUploadBytes($ctx, $sessionId, $file['tmp_name']);
+                $documents->completeUpload($ctx, $sessionId, $bytes);
 
                 return $documents->finalizeUpload($ctx, $sessionId, $this->finalizeIntent($form));
             } catch (Throwable $e) {
@@ -250,9 +257,17 @@ final class DocumentController extends BaseController
             $link = [
                 'contract_id'       => $v->optionalId('contract_id'),
                 'drive_document_id' => $v->requiredString('drive_document_id', 64),
+                // DocumentService::linkExistingDriveFile() runs the same
+                // filename/content_type allow-list check a fresh upload does —
+                // this file is already in Drive, but the pairing still has to
+                // be named for that check to run at all.
+                'filename'          => $v->requiredString('filename', 255),
+                'content_type'      => strtolower($v->requiredString('content_type', 128)),
                 'title'             => $v->requiredString('title', 255),
                 'doc_kind'          => $v->optionalEnum('doc_kind', self::DOC_KINDS, 'contract') ?? 'contract',
-                'description'       => $v->optionalText('description', 4000),
+                // The service's field is `notes`; `description` is this
+                // endpoint's public name for the same thing.
+                'notes'             => $v->optionalText('description', 4000),
             ];
 
             if ($link['contract_id'] === null) {
@@ -426,54 +441,49 @@ final class DocumentController extends BaseController
     }
 
     /**
-     * Move the uploaded temp file to the location the session allocated.
+     * The uploaded part's bytes, once the session they belong to is confirmed
+     * to be a local-storage one.
      *
-     * The destination comes from the session row and never from the request:
-     * `$_FILES['name']` is text the caller chose, and letting it reach a path is
-     * how an upload becomes a write into the document root.
-     *
-     * @param array<string,mixed> $session
+     * Handing bytes to `DocumentService::completeUpload()` rather than moving
+     * the temp file ourselves means the write goes through
+     * `LocalStorageAdapter::completeUpload()` — the only place that knows the
+     * configured storage root, sniffs the content against the declared type,
+     * and writes with the atomic-rename-plus-chmod sequence a contract file
+     * needs. A path built here instead, from the session's *relative*
+     * `local_path`, would resolve against this process's working directory
+     * rather than that root — `dirname($path)` and `move_uploaded_file()` both
+     * take it as-is, and nothing prefixes it with the adapter's configured root.
      */
-    private function storeLocally(TenantContext $ctx, int $sessionId, array $session, string $tmpPath): void
+    private function readDirectUploadBytes(TenantContext $ctx, int $sessionId, string $tmpPath): string
     {
-        $provider = is_string($session['storage_provider'] ?? null) ? $session['storage_provider'] : '';
-        $path     = is_string($session['local_path'] ?? null) ? $session['local_path'] : '';
+        $st = $this->db()->prepare(
+            'SELECT storage_provider FROM contract_upload_sessions
+             WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
+        );
+        $st->execute([$sessionId, $ctx->environment, $ctx->cmpId]);
+        $provider = $st->fetchColumn();
 
-        if ($provider === '' || $path === '') {
-            $st = $this->db()->prepare(
-                'SELECT storage_provider, local_path FROM contract_upload_sessions
-                 WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
-            );
-            $st->execute([$sessionId, $ctx->environment, $ctx->cmpId]);
-            $row = $st->fetch();
-
-            if (! is_array($row)) {
-                throw DomainException::notFound('Upload session not found.');
-            }
-
-            $provider = (string) ($row['storage_provider'] ?? '');
-            $path     = (string) ($row['local_path'] ?? '');
+        if ($provider === false) {
+            throw DomainException::notFound('Upload session not found.');
         }
-
         if ($provider !== 'local') {
             // Drive is the active adapter, so the bytes have a better home and
             // a caller posting them here is using the wrong flow.
             throw DomainException::conflict('This deployment uploads documents to storage directly. Use an upload session.');
         }
-        if ($path === '') {
-            throw DomainException::unavailable('Local document storage is enabled but no location was allocated.');
-        }
-
-        $directory = dirname($path);
-        if (! is_dir($directory) && ! @mkdir($directory, 0770, true) && ! is_dir($directory)) {
-            throw DomainException::unavailable('The local document store is not writable.');
-        }
 
         // is_uploaded_file is what separates a real multipart temp file from a
         // path someone talked another part of the request into producing.
-        if (! is_uploaded_file($tmpPath) || ! move_uploaded_file($tmpPath, $path)) {
+        if (! is_uploaded_file($tmpPath)) {
             throw DomainException::unavailable('The upload could not be stored.');
         }
+
+        $bytes = file_get_contents($tmpPath);
+        if ($bytes === false) {
+            throw DomainException::unavailable('The upload could not be stored.');
+        }
+
+        return $bytes;
     }
 
     /**

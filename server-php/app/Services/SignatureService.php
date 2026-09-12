@@ -173,6 +173,28 @@ final class SignatureService
         $v->assert();
 
         return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $contractId, $subject, $message, $expires, $sequent, $versionId, $signers): array {
+            // Re-checked under the transaction, with the contract row locked:
+            // the check above ran before the transaction opened, so two
+            // creates racing each other would otherwise both pass it and
+            // leave the contract with two open envelopes, each sendable and
+            // signable on its own, with nothing downstream able to say which
+            // document the company is actually bound by.
+            $pdo->prepare('SELECT id FROM contracts WHERE id = ? AND environment = ? AND cmp_id = ? FOR UPDATE')
+                ->execute([$contractId, $ctx->environment, $ctx->cmpId]);
+
+            $open = $pdo->prepare(
+                "SELECT id FROM signature_requests
+                 WHERE contract_id = ? AND environment = ? AND cmp_id = ? AND status IN (" . self::placeholders(self::OPEN_STATUSES) . ")
+                 LIMIT 1"
+            );
+            $open->execute(array_merge([$contractId, $ctx->environment, $ctx->cmpId], self::OPEN_STATUSES));
+            if ($open->fetchColumn() !== false) {
+                throw DomainException::conflict(
+                    'This contract already has a signature request in progress. Cancel it before starting another.',
+                    'SIGNATURE_ALREADY_OPEN'
+                );
+            }
+
             $st = $pdo->prepare(
                 'INSERT INTO signature_requests
                  (environment, cmp_id, contract_id, document_version_id, provider, status,

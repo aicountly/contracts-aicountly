@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\Database;
+use App\Support\ContractVisibility;
 use App\Support\Dates;
 use App\Support\DomainException;
 use App\Support\Enums;
@@ -1224,16 +1225,31 @@ final class RiskEngine
         return $assessment;
     }
 
-    /** @return array<string,mixed>|null */
+    /**
+     * Tenant scope alone is not enough: without the visibility narrowing a
+     * user restricted to their own contracts could still reach another
+     * contract's findings — read, and through reviewFinding() written — by
+     * walking finding ids, even though GET /contracts/{id}/risk 404s them on
+     * the same contract. Expressed as an EXISTS over f.contract_id rather
+     * than a join, since this query does not join contracts.
+     *
+     * @return array<string,mixed>|null
+     */
     private function findingById(TenantContext $ctx, int $findingId): ?array
     {
+        [$visibility, $visibilityParams] = ContractVisibility::existsFor($ctx, 'f.contract_id', 'finvis');
+
         $st = $this->pdo->prepare(
             'SELECT f.*, c.heading AS clause_heading, c.clause_number
              FROM contract_risk_findings f
              LEFT JOIN contract_clauses c ON c.id = f.clause_id
-             WHERE f.id = ? AND f.environment = ? AND f.cmp_id = ? LIMIT 1'
+             WHERE f.id = :id AND f.environment = :env AND f.cmp_id = :cmp' . $visibility . '
+             LIMIT 1'
         );
-        $st->execute([$findingId, $ctx->environment, $ctx->cmpId]);
+        $st->execute(array_merge(
+            ['id' => $findingId, 'env' => $ctx->environment, 'cmp' => $ctx->cmpId],
+            $visibilityParams
+        ));
         $row = $st->fetch();
 
         return is_array($row) ? $this->hydrateFinding($row) : null;

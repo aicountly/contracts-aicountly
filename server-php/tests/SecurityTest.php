@@ -220,6 +220,52 @@ assert_false(Http::isSafeUrl('not a url'), 'a malformed URL is refused');
 assert_false(Http::isSafeUrl('https://this-host-does-not-resolve.invalid/x'), 'a host that resolves to nothing is refused');
 assert_true(Http::isSafeUrl('https://drive.aicountly.com/api/documents'), 'a real integration host is allowed');
 
+// A dual-stack host is vetted on every address family it resolves to, not
+// just IPv4. gethostbynamel() alone only ever returns A records; curl
+// resolves the same hostname with getaddrinfo() and may connect over
+// whichever family the OS prefers, so a guard that only checked the A record
+// could pass a name whose AAAA record is loopback or link-local straight
+// through. setResolverForTests() stands in for DNS so the mismatch can be
+// forced deterministically instead of depending on real records.
+$withResolver = static function (array $addresses, callable $fn): void {
+    Http::setResolverForTests(static fn (string $host): array => $addresses);
+    try {
+        $fn();
+    } finally {
+        Http::setResolverForTests(null);
+    }
+};
+
+$withResolver(['203.0.113.10', 'fe80::1'], static function (): void {
+    assert_false(
+        Http::isSafeUrl('https://dual-stack.example.test/'),
+        'a link-local AAAA record is refused even though the A record is public'
+    );
+});
+
+$withLoopback(false, static function () use ($withResolver): void {
+    $withResolver(['203.0.113.10', '::1'], static function (): void {
+        assert_false(
+            Http::isSafeUrl('https://dual-stack.example.test/'),
+            'a loopback AAAA record is refused even though the A record is public'
+        );
+    });
+});
+
+$withResolver(['203.0.113.10', '2607:f8b0:4001:c10::66'], static function (): void {
+    assert_true(
+        Http::isSafeUrl('https://dual-stack.example.test/'),
+        'a genuinely public AAAA record alongside a public A record is still allowed'
+    );
+});
+
+// NAT64 (64:ff9b::/96) and 6to4 (2002::/16) addresses embed an IPv4 address
+// in their low bits, so the metadata endpoint reachable that way must be
+// refused like any other encoding of it.
+assert_false(Http::isSafeUrl('http://[64:ff9b::a9fe:a9fe]/'), 'a NAT64-mapped metadata address is refused');
+assert_false(Http::isSafeUrl('http://[2002:a9fe:a9fe::]/'), 'a 6to4-mapped metadata address is refused');
+assert_true(Http::isSafeUrl('http://[64:ff9b::808:808]/'), 'a NAT64-mapped public address stays allowed');
+
 // --- Date arithmetic is not a place to be clever ----------------------------
 // A notice deadline computed wrongly is a missed cancellation window, so the
 // month-end cases are pinned.
