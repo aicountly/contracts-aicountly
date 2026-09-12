@@ -1394,37 +1394,51 @@ export interface NotificationPage extends Paged<NotificationItem> {
 
 /* --- Global search -------------------------------------------------------- */
 
-export interface SearchContractHit {
+/**
+ * Every hit carries the route that opens it.
+ *
+ * Built by the server rather than assembled in the browser: a clause hit goes
+ * to the library or to a contract's clauses tab depending on where it was
+ * found, and duplicating that rule here would put two answers to one question
+ * in two repositories.
+ */
+interface SearchHit {
   id: number
+  link_path: string
+  snippet?: string | null
+}
+
+export interface SearchContractHit extends SearchHit {
+  uuid?: string | null
   contract_number?: string | null
   title: string
   counterparty_name?: string | null
   status?: string | null
   contract_type_name?: string | null
-  snippet?: string | null
+  expiry_date?: string | null
+  total_value?: string | number | null
+  currency?: string | null
+  risk_level?: string | null
+  owner_uuid?: string | null
+  tags?: string[]
 }
 
-export interface SearchClauseHit {
-  id: number
-  title: string
+export interface SearchClauseHit extends SearchHit {
+  /** `library` or `contract` — which of the two a hit came from. */
+  source: string
+  heading?: string | null
   category_name?: string | null
-  approval_status?: string | null
-  snippet?: string | null
-  /** Present when the hit is a clause inside a contract rather than a library entry. */
+  /** Set when the hit is a clause standing in a contract, null for a library entry. */
   contract_id?: number | null
-  contract_title?: string | null
+  contract_number?: string | null
 }
 
-export interface SearchDocumentHit {
-  id: number
-  title?: string | null
+export interface SearchDocumentHit extends SearchHit {
+  document_title?: string | null
   filename?: string | null
-  doc_kind?: string | null
-  version_id?: number | null
   contract_id?: number | null
   contract_number?: string | null
   contract_title?: string | null
-  snippet?: string | null
 }
 
 /** `GET /search?q=` — three lists the header box searches across. */
@@ -1433,6 +1447,8 @@ export interface SearchResults {
   clauses?: SearchClauseHit[] | null
   documents?: SearchDocumentHit[] | null
   total?: number | null
+  /** Echoed back, so a late response can be matched to the term that asked for it. */
+  term?: string | null
 }
 
 /* --- Settings ------------------------------------------------------------- */
