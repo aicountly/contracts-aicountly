@@ -147,6 +147,36 @@ commands win.
 | Browser end-to-end | **Not started** | Every layer is tested, but nothing drives a real browser through a full flow |
 | Load / performance testing | **Not started** | Indexes are in place and queries are bounded, but no figure here has been measured under load, so none is claimed |
 
+## Adversarial security review
+
+Run once, post-implementation: five independent lenses (tenant isolation, authz
+and the signature webhook, injection, data integrity/concurrency, SSRF/secrets/
+files) hunted the codebase, and every finding they raised was then put to
+skeptics instructed to refute it — unanimous survival required. 29 findings
+were raised; 12 were put through verification (the rest left unverified rather
+than spending unboundedly, and are not claimed as either real or false); 11
+survived and 1 was refuted. All 11 are fixed below, each with a test that
+fails against the pre-fix code and passes against the fix, proven by actually
+reverting and re-running, not asserted.
+
+Fixed: a raw status UPDATE in the approval path that bypassed the transition
+graph (a lone approver could reopen a terminated contract); a notification
+dedupe key with no term component (the entire renewal alert ladder went silent
+after the first renewal on every auto-renewing contract); obligation
+occurrences and renewal cycles readable/writable by id bypassing the
+visibility check their list views enforce; a risk-finding review endpoint
+gated on a read permission; a missing CSV formula-injection guard on one SPA
+export path; an amendment leaving its contract's renewal cycle dates stale;
+recurring obligations that stopped generating at a fixed horizon with nothing
+to extend them after a renewal; amendment audit trail corruption on a double
+apply; a request-conversion race producing duplicate contracts; and an
+unbounded zip-bomb allocation in .docx text extraction.
+
+Sixteen findings were raised but left unverified by the review's own cost cap
+and are not acted on here — neither confirmed nor dismissed. A further pass
+that verifies and, where real, fixes them is the natural next security work on
+this codebase before a production launch.
+
 ## Known limits, stated plainly
 
 1. **AI is unconfigured until Console has a bound credential.** Not a defect — the
