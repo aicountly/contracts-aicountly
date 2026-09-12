@@ -300,6 +300,24 @@ jobs:
           echo "Deployed server-php to \$REMOTE_ROOT/api/"
           echo "::notice::If this is the first API deploy, create api/.env on the server from server-php/.env.example — it is never uploaded."
 
+      # Schema changes ship with the code that needs them, so migrating is part
+      # of the deploy rather than something to remember afterwards. The runner
+      # is idempotent — it skips what is already applied — and each file runs in
+      # its own transaction, so a failure leaves the schema whole rather than
+      # half-migrated.
+      - name: Apply database migrations
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          set -o pipefail
+          if ssh deploy-target "cd '$REMOTE_ROOT/api' && php database/migrate.php" 2>&1 | tee /tmp/migrate.out; then
+            echo "Migrations applied."
+          else
+            echo "::error::Migrations failed. The code is deployed but the schema is behind it — the app will report DB_UNAVAILABLE or a missing table until this is resolved."
+            sed 's/^/    /' /tmp/migrate.out
+            exit 1
+          fi
+
       # A deployed API that cannot answer is worth knowing about now rather
       # than from the app's login screen. /health needs no credentials.
       - name: Smoke-test the deployed API

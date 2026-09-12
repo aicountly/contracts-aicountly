@@ -1,35 +1,348 @@
-:root {
-  --bg: #ffffff;
-  --fg: #18181b;
-  --muted: #71717a;
-  --border: #e4e4e7;
-  --accent: #18181b;
-  --accent-fg: #fafafa;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.6;
-  color-scheme: light dark;
+/* AICOUNTLY Contracts — global styles
+ *
+ * Token model, shared with the rest of the AICOUNTLY fleet (see Drive and Books
+ * web/src/index.css — these values are deliberately identical so the products
+ * look like one system):
+ *
+ *  - `--color-primary*`, `--color-surface*`, `--color-fg*`, `--color-border*`
+ *    are space-separated RGB triples ("37 176 3"), consumed as
+ *    `rgb(var(--token) / <alpha>)` by Tailwind (tailwind.config.js) and by CSS.
+ *  - `--color-bg*` / `--color-text*` are FULL COLORS, defined in terms of the
+ *    triples above, for the places that need a plain color value.
+ *  - Light/dark is the `dark` class on <html>; the accent preset is `data-theme`
+ *    on <html>. Both are applied before first paint by the script in index.html
+ *    so the page never flashes the wrong theme.
+ *
+ * Green is for emphasis — actions, active state, positive status. The working
+ * surfaces stay light and quiet; a screen filled with brand colour is harder to
+ * read, and a contract list is something people stare at all day.
+ */
+:root,
+[data-theme='default'] {
+  color-scheme: light;
+
+  /* Accent — AICOUNTLY brand green #25b003 */
+  --color-primary: 37 176 3;
+  --color-primary-hover: 40 160 3;
+  --color-primary-active: 30 108 2;
+  --color-primary-light: 233 252 233;
+
+  /* Surfaces, text and lines */
+  --workspace-bg: 245 247 250;
+  --color-surface: 255 255 255;
+  --color-surface-2: 246 248 250;
+  --color-surface-3: 238 242 245;
+  --color-fg: 15 23 42;
+  --color-fg-strong: 2 6 23;
+  --color-fg-muted: 100 116 139;
+  --color-fg-subtle: 148 163 184;
+  --color-border: 226 232 240;
+  --color-border-strong: 203 213 225;
+
+  /* Full-colour aliases */
+  --color-primary-dark: rgb(var(--color-primary-active));
+  --color-primary-muted: rgb(var(--color-primary) / 0.12);
+  --color-primary-border: rgb(var(--color-primary) / 0.35);
+  --color-accent: rgb(var(--color-primary));
+
+  --color-bg: rgb(var(--workspace-bg));
+  --color-bg-card: rgb(var(--color-surface));
+  --color-bg-subtle: rgb(var(--color-surface-2));
+  --color-bg-inset: rgb(var(--color-surface-3));
+  --color-text: rgb(var(--color-fg));
+  --color-text-secondary: rgb(var(--color-fg-muted));
+  --color-text-muted: rgb(var(--color-fg-muted));
+  --color-text-subtle: rgb(var(--color-fg-subtle));
+  --color-border-light: #f1f5f9;
+
+  /* Status */
+  --color-success: #16a34a;
+  --color-success-bg: #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-warning: #d97706;
+  --color-warning-bg: #fffbeb;
+  --color-warning-text: #92400e;
+  --color-warning-border: #fcd34d;
+  --color-danger: #dc2626;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-info: #0891b2;
+  --color-info-bg: #ecfeff;
+  --color-info-border: #a5f3fc;
+  --color-neutral: #64748b;
+  --color-neutral-bg: #f1f5f9;
+  --color-neutral-border: #e2e8f0;
+
+  /* Layout */
+  --sidebar-width: 248px;
+  --sidebar-rail: 60px;
+  --topbar-height: 56px;
+  --shell-max-width: 1680px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 10px -2px rgba(15, 23, 42, 0.09);
+  --shadow-lg: 0 12px 28px -8px rgba(15, 23, 42, 0.18);
+  --font-sans: 'Nunito', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;
-    --fg: #fafafa;
-    --muted: #a1a1aa;
-    --border: #27272a;
-    --accent: #fafafa;
-    --accent-fg: #09090b;
-  }
+.dark {
+  color-scheme: dark;
+
+  --color-primary: 37 176 3;
+  --color-primary-hover: 59 184 28;
+  --color-primary-active: 33 155 3;
+  --color-primary-light: 21 47 26;
+
+  --workspace-bg: 9 13 17;
+  --color-surface: 18 24 30;
+  --color-surface-2: 27 34 42;
+  --color-surface-3: 36 45 54;
+  --color-fg: 226 232 240;
+  --color-fg-strong: 248 250 252;
+  --color-fg-muted: 148 163 184;
+  --color-fg-subtle: 100 116 139;
+  --color-border: 39 48 58;
+  --color-border-strong: 55 66 78;
+
+  --color-primary-dark: rgb(var(--color-primary-hover));
+  --color-border-light: rgb(var(--color-border) / 0.6);
+
+  --color-success: #4ade80;
+  --color-success-bg: #12291b;
+  --color-success-border: #1f5133;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #2c2310;
+  --color-warning-text: #fcd34d;
+  --color-warning-border: #4d3c14;
+  --color-danger: #f87171;
+  --color-danger-bg: #331b1e;
+  --color-danger-border: #5b2727;
+  --color-info: #38bdf8;
+  --color-info-bg: #0e2836;
+  --color-info-border: #14465c;
+  --color-neutral: #94a3b8;
+  --color-neutral-bg: #1e2630;
+  --color-neutral-border: #2c3641;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 10px -2px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.6);
 }
 
-* {
+/* Accent presets, shared with the fleet so a user's chosen accent follows them
+   between AICOUNTLY products. */
+[data-theme='red']    { --color-primary: 221 0 38;    --color-primary-hover: 198 0 34;   --color-primary-active: 160 0 28;   --color-primary-light: 254 226 226; }
+[data-theme='orange'] { --color-primary: 236 123 45;  --color-primary-hover: 214 110 40; --color-primary-active: 180 90 32;  --color-primary-light: 255 237 213; }
+[data-theme='sky'],
+[data-theme='sky_blue'] { --color-primary: 47 161 218; --color-primary-hover: 40 145 198; --color-primary-active: 30 120 170; --color-primary-light: 224 242 254; }
+[data-theme='purpl'],
+[data-theme='purple'] { --color-primary: 217 124 248; --color-primary-hover: 195 100 230; --color-primary-active: 160 80 200; --color-primary-light: 243 232 255; }
+[data-theme='yelow'],
+[data-theme='yellow'] { --color-primary: 211 176 0;   --color-primary-hover: 190 158 0;  --color-primary-active: 150 125 0;  --color-primary-light: 254 249 195; }
+[data-theme='part'],
+[data-theme='lime']   { --color-primary: 162 196 46;  --color-primary-hover: 145 175 40; --color-primary-active: 120 145 32; --color-primary-light: 236 252 203; }
+[data-theme='grn'],
+[data-theme='teal']   { --color-primary: 91 187 177;  --color-primary-hover: 75 165 156;  --color-primary-active: 55 140 132; --color-primary-light: 204 251 241; }
+[data-theme='blue']   { --color-primary: 56 116 255;  --color-primary-hover: 45 100 230;  --color-primary-active: 37 80 200;  --color-primary-light: 219 234 254; }
+
+.dark[data-theme='red']    { --color-primary: 227 48 79;   --color-primary-hover: 230 69 97;   --color-primary-active: 200 43 70;  --color-primary-light: 49 28 37; }
+.dark[data-theme='orange'] { --color-primary: 236 123 45;  --color-primary-hover: 238 136 66;  --color-primary-active: 208 108 40; --color-primary-light: 51 39 32; }
+.dark[data-theme='sky'],
+.dark[data-theme='sky_blue'] { --color-primary: 47 161 218; --color-primary-hover: 68 170 222; --color-primary-active: 41 142 192; --color-primary-light: 22 45 58; }
+.dark[data-theme='purpl'],
+.dark[data-theme='purple'] { --color-primary: 217 124 248; --color-primary-hover: 221 137 249; --color-primary-active: 191 109 218; --color-primary-light: 48 39 63; }
+.dark[data-theme='yelow'],
+.dark[data-theme='yellow'] { --color-primary: 211 176 0;  --color-primary-hover: 215 184 26;  --color-primary-active: 186 155 0;  --color-primary-light: 47 47 26; }
+.dark[data-theme='part'],
+.dark[data-theme='lime']   { --color-primary: 162 196 46; --color-primary-hover: 171 202 67;  --color-primary-active: 143 172 40; --color-primary-light: 40 50 32; }
+.dark[data-theme='grn'],
+.dark[data-theme='teal']   { --color-primary: 91 187 177; --color-primary-hover: 107 194 185; --color-primary-active: 80 165 156; --color-primary-light: 29 48 52; }
+.dark[data-theme='blue']   { --color-primary: 56 116 255; --color-primary-hover: 76 130 255;  --color-primary-active: 49 102 224; --color-primary-light: 24 38 64; }
+
+/* --- Reset ---------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  margin: 0;
+  font-family: var(--font-sans);
+  color: rgb(var(--color-fg));
+  background-color: rgb(var(--workspace-bg));
+  line-height: 1.55;
   min-height: 100vh;
-  background: var(--bg);
-  color: var(--fg);
-  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: rgb(var(--color-primary));
+  text-decoration: none;
+}
+
+/* A visible focus ring on keyboard navigation only. Removing the outline
+   outright is the single most common accessibility regression in an app like
+   this, so it is defined once, here, rather than per component. */
+:focus-visible {
+  outline: 2px solid rgb(var(--color-primary));
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: rgb(var(--color-primary) / 0.22);
+}
+
+/* --- Scrollbars ----------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--color-border-strong)) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-border-strong));
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* --- Motion --------------------------------------------------------------- */
+
+@keyframes ct-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes ct-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ct-spin {
+  to { transform: rotate(360deg); }
+}
+
+.ct-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--color-surface-3)) 25%,
+    rgb(var(--color-surface-2)) 50%,
+    rgb(var(--color-surface-3)) 75%
+  );
+  background-size: 200% 100%;
+  animation: ct-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+.ct-fade-in {
+  animation: ct-fade-in 0.18s ease-out;
+}
+
+/* Anyone who has asked their system to reduce motion means it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- Utilities used across screens ---------------------------------------- */
+
+.ct-card {
+  background: rgb(var(--color-surface));
+  border: 1px solid rgb(var(--color-border));
+  border-radius: var(--radius-lg);
+}
+
+/* Reads as body text, behaves as a link. Used for row titles in tables. */
+.ct-link {
+  color: rgb(var(--color-fg-strong));
+  font-weight: 600;
+}
+
+.ct-link:hover {
+  color: rgb(var(--color-primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Visible to a screen reader, invisible on screen. */
+.ct-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The skip link is the first focusable thing on the page and stays hidden until
+   it is focused. Without it, keyboard users tab the whole sidebar on every
+   navigation. */
+.ct-skip-link {
+  position: absolute;
+  left: -9999px;
+  z-index: 100;
+  padding: 10px 16px;
+  background: rgb(var(--color-surface));
+  border: 1px solid rgb(var(--color-primary));
+  border-radius: var(--radius-md);
+  font-weight: 700;
+}
+
+.ct-skip-link:focus {
+  left: 12px;
+  top: 12px;
+}
+
+/* Wide content scrolls inside its own box; the page body never scrolls
+   sideways. */
+.ct-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media print {
+  .ct-no-print { display: none !important; }
+  body { background: #fff; }
 }
