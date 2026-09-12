@@ -74,7 +74,15 @@ function FeedRow({ entry }: { entry: ActivityEntry }) {
   const body = (
     <>
       <span style={{ fontSize: 12.5, color: 'var(--color-text)', lineHeight: 1.45 }}>
-        <strong style={{ fontWeight: 700 }}>{entry.actor_name ?? 'Someone'}</strong>{' '}
+        {/* No stand-in for a missing name. The server stamps the actor at
+            write time and leaves it null when the portal named nobody, so
+            "Someone renewed the contract" would be asserting a person where
+            the record has none — the sentence reads correctly without it. */}
+        {entry.actor_name ? (
+          <>
+            <strong style={{ fontWeight: 700 }}>{entry.actor_name}</strong>{' '}
+          </>
+        ) : null}
         {entry.description ?? humanise(entry.action).toLowerCase()}
         {subject ? (
           <>

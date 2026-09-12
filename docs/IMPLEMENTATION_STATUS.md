@@ -120,6 +120,7 @@ commands win.
 | Global search | **Done** | tsvector ranking plus trigram similarity, so a typo still finds the contract |
 | Reports | **Done** | Uniform `{columns, rows}` envelope, one renderer, CSV export with the formula-injection guard |
 | Saved views, favourites, recent | **Done** | |
+| Activity timeline actor names | **Done** | Stamped from the acting session at write time, not resolved on read. A session the portal did not name leaves the actor null and the timeline renders the event without one, rather than attributing it to "someone" |
 
 ## Frontend
 

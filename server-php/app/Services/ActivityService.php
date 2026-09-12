@@ -34,8 +34,9 @@ final class ActivityService
         try {
             $st = $this->pdo->prepare(
                 'INSERT INTO contract_activity_logs
-                 (environment, cmp_id, contract_id, request_id, actor_uuid, event_type, summary, icon, metadata)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)'
+                 (environment, cmp_id, contract_id, request_id, actor_uuid, actor_label,
+                  event_type, summary, icon, metadata)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)'
             );
             $st->execute([
                 $ctx->environment,
@@ -43,6 +44,11 @@ final class ActivityService
                 $contractId,
                 $requestId,
                 $ctx->uuid,
+                // Stamped now, from the session that is acting. A label
+                // resolved later could not be trusted anyway: the person may
+                // have been renamed, or have left, and the timeline is a record
+                // of who did something at the time they did it.
+                $ctx->actorLabel,
                 $eventType,
                 mb_substr($summary, 0, 500),
                 $icon ?? self::iconFor($eventType),

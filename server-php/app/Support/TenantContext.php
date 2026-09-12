@@ -28,6 +28,17 @@ final class TenantContext
         public readonly ?array $company = null,
         public readonly array $permissions = [],
         public readonly array $roles = [],
+        /**
+         * The acting user's display name, as the portal gave it, or null.
+         *
+         * Carried on the context rather than looked up where it is needed:
+         * the activity timeline stamps it at write time, and resolving a name
+         * from a uuid on every dashboard read would put a portal round trip on
+         * the hot path of a screen that renders on every navigation. Null is a
+         * real answer — a portal that did not name the session leaves this
+         * empty rather than having something invented for it.
+         */
+        public readonly ?string $actorLabel = null,
     ) {
     }
 

@@ -70,6 +70,19 @@ abstract class BaseController
             Response::unauthorized('The portal did not identify this session.');
         }
 
+        // Several portal endpoints spell the display name differently and some
+        // omit it. The first non-empty one wins and no fallback is invented:
+        // an unnamed session stays unnamed, which the timeline renders as an
+        // event with no actor rather than as an event by someone unidentified.
+        $actorLabel = null;
+        foreach (['name', 'full_name', 'user_name', 'display_name', 'fullname'] as $key) {
+            $candidate = trim((string) ($session[$key] ?? ''));
+            if ($candidate !== '') {
+                $actorLabel = mb_substr($candidate, 0, 160);
+                break;
+            }
+        }
+
         $cmpId = $this->contextId('cmp_id', 'X-AIC-CMP-ID');
         $fyId  = $this->contextId('fy_id', 'X-AIC-FY-ID');
         $boId  = $this->contextId('bo_id', 'X-AIC-BO-ID');
@@ -117,6 +130,7 @@ abstract class BaseController
             company: $company,
             permissions: Permissions::forRoles($roles),
             roles: $roles,
+            actorLabel: $actorLabel,
         );
     }
 
