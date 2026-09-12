@@ -172,10 +172,33 @@ to extend them after a renewal; amendment audit trail corruption on a double
 apply; a request-conversion race producing duplicate contracts; and an
 unbounded zip-bomb allocation in .docx text extraction.
 
-Sixteen findings were raised but left unverified by the review's own cost cap
-and are not acted on here — neither confirmed nor dismissed. A further pass
-that verifies and, where real, fixes them is the natural next security work on
-this codebase before a production launch.
+The remaining 17 findings, left unverified by the review's own cost cap, were
+then independently re-verified in a second pass — each treated as an unproven
+hypothesis, not fact, and checked against the current code before anything
+changed. 16 held up and are fixed; 1 (a signature-webhook delivery permanently
+swallowed on first failure) was independently refuted twice and is not acted
+on. Every fix, again, is pinned by a test proven with a revert-and-check.
+
+Fixed in this second pass: uploads that landed outside the configured storage
+root entirely, served by the API's own process as a static file with no auth;
+two completeUpload()/documents-link bugs that made local-storage uploads and
+Drive-file linking fail outright; two more IDOR-shaped reads (clause text,
+counterparty/signatory details) reachable on a contract the caller cannot
+open, of the same shape closed earlier; a cross-tenant template/request id
+acceptable at contract creation; a risk-finding lookup and a termination
+in-progress check both tenant-scoped only; a commercial-field write gated on
+the wrong permission; two genuine races (concurrent terminations, concurrent
+signature-request creation) reproduced with real concurrent processes and
+closed with `SELECT ... FOR UPDATE`; an SSRF guard that never checked AAAA
+records; a prompt-sanitiser role-header strip defeated by indentation and a
+length cap silently floored to 200 characters; a contract list leaking
+`total_value` past the permission its own detail view withholds; a
+search-vector backfill that was a no-op due to a trigger column list
+mismatch, corrected in a new migration rather than editing the applied one;
+and a signed local-storage file link pointing at a route that did not exist.
+
+Every finding the original review raised has now been checked. None remains
+unverified.
 
 ## Known limits, stated plainly
 
