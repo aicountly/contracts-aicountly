@@ -30,7 +30,13 @@ use PDO;
  * `correction`, which leaves both readings visible and dated — which is what
  * makes it evidence rather than a claim.
  *
- * Every query filters `environment` AND `cmp_id` from the TenantContext.
+ * Every query filters `environment` AND `cmp_id` from the TenantContext. A
+ * party is reached through its contract, though, and same company is not the
+ * same thing as visible: contract.view alone does not grant every contract in
+ * the company, only the ones ContractVisibility says this caller may open.
+ * Every read and write here goes through ContractService's own find()/
+ * findOrFail() for that reason, rather than a tenant-only check of its own —
+ * a second copy of that predicate would eventually disagree with the first.
  */
 final class PartyService
 {
@@ -54,10 +60,13 @@ final class PartyService
 
     private ActivityService $activity;
 
+    private ContractService $contracts;
+
     public function __construct(private PDO $pdo)
     {
-        $this->audit    = new AuditService($pdo);
-        $this->activity = new ActivityService($pdo);
+        $this->audit     = new AuditService($pdo);
+        $this->activity  = new ActivityService($pdo);
+        $this->contracts = new ContractService($pdo);
     }
 
     public static function make(): ?self
@@ -105,7 +114,19 @@ final class PartyService
         $st->execute([$partyId, $ctx->environment, $ctx->cmpId]);
         $row = $st->fetch();
 
-        return is_array($row) ? $this->hydrate($row) : null;
+        if (! is_array($row)) {
+            return null;
+        }
+
+        // Same company is not the same thing as visible: a party carries the
+        // counterparty's signatory name, email and phone, and contract.view
+        // alone must not let a caller reach those by party id for a contract
+        // ContractController would already 404 them from.
+        if ($this->contracts->find($ctx, (int) $row['contract_id']) === null) {
+            return null;
+        }
+
+        return $this->hydrate($row);
     }
 
     /** @return array<string,mixed> @throws DomainException */
@@ -712,22 +733,17 @@ final class PartyService
     }
 
     /**
-     * The contract exists for this tenant.
+     * The contract exists, and this caller may see it.
      *
-     * Checked before every party operation and by id only — a party is reached
-     * through a contract, and a caller walking contract ids must not be able to
-     * tell another company's contract from one that was never created.
+     * Delegated to ContractService rather than a tenant-only query of its own:
+     * a user holding contract.view but not contract.view_all sees only the
+     * contracts they own, created, or approve, and a party is reached through
+     * a contract, so it must be refused the same way the contract itself would
+     * be.
      */
     private function assertContract(TenantContext $ctx, int $contractId): void
     {
-        $st = $this->pdo->prepare(
-            'SELECT 1 FROM contracts WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
-        );
-        $st->execute([$contractId, $ctx->environment, $ctx->cmpId]);
-
-        if ($st->fetchColumn() === false) {
-            throw DomainException::notFound('Contract not found.');
-        }
+        $this->contracts->findOrFail($ctx, $contractId);
     }
 
     /**

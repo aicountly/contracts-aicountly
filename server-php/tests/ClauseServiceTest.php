@@ -17,7 +17,9 @@ require_once __DIR__ . '/bootstrap.php';
 
 use App\Services\ClauseService;
 use App\Services\CompanyBootstrapService;
+use App\Services\ContractService;
 use App\Support\Dates;
+use App\Support\Permissions;
 use App\Support\ValidationFailed;
 
 $pdo = t_database();
@@ -392,6 +394,36 @@ assert_throws(
     static fn () => $clauses->deleteCategory($ctx2, (int) $special['id']),
     'nor delete company 1\'s category',
     'Clause category not found'
+);
+
+// ---------------------------------------------------------------------------
+// A colleague with contract.view but no relation to this contract
+// ---------------------------------------------------------------------------
+//
+// contract.view alone (the stock read_only role) narrows a contract to the
+// ones this user owns, created, or is an approver on — the same row-level
+// rule ContractService::find() enforces. A clause is the substance of the
+// agreement, so listing them must refuse exactly where opening the contract
+// itself would.
+
+$contracts   = new ContractService($pdo);
+$colleague   = t_context(1, 'USER-C', [Permissions::CONTRACT_VIEW, Permissions::REPORT_VIEW], 'sandbox', ['read_only']);
+
+assert_null($contracts->find($colleague, $contractId), 'a colleague with contract.view alone cannot open a contract they do not own');
+assert_throws(
+    static fn () => $clauses->listForContract($colleague, $contractId),
+    'so they cannot list its clauses by knowing its id either',
+    'Contract not found'
+);
+assert_throws(
+    static fn () => $clauses->createForContract($colleague, $contractId, ['body_text' => 'x']),
+    'nor add one',
+    'Contract not found'
+);
+assert_throws(
+    static fn () => $clauses->attachToContract($colleague, $contractId, (int) $cap['id']),
+    'nor attach one from the library',
+    'Contract not found'
 );
 
 t_done('ClauseServiceTest');

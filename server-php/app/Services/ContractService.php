@@ -352,6 +352,8 @@ final class ContractService
 
         $this->assertTypeBelongsToTenant($ctx, $fields['contract_type_id']);
         $this->assertDepartmentBelongsToTenant($ctx, $fields['department_id']);
+        $this->assertTemplateBelongsToTenant($ctx, $fields['template_id']);
+        $this->assertRequestBelongsToTenant($ctx, $fields['request_id']);
 
         return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $fields, $body): array {
             $number = $this->numbering->nextContractNumber($ctx);
@@ -455,6 +457,8 @@ final class ContractService
 
         $this->assertTypeBelongsToTenant($ctx, $fields['contract_type_id']);
         $this->assertDepartmentBelongsToTenant($ctx, $fields['department_id']);
+        $this->assertTemplateBelongsToTenant($ctx, $fields['template_id']);
+        $this->assertRequestBelongsToTenant($ctx, $fields['request_id']);
 
         // Commercial figures are gated separately: Finance may see and change
         // them where a contract owner may only see them.
@@ -839,6 +843,45 @@ final class ContractService
 
         if ($st->fetchColumn() === false) {
             throw new \App\Support\ValidationFailed(['department_id' => 'Choose a department from your own list.']);
+        }
+    }
+
+    /**
+     * Left unchecked, this is how a contract in one company ends up counted
+     * against a template in another: the FK only proves the id exists, not
+     * that it exists for this tenant, and that borrowed row then blocks the
+     * owning tenant from deleting a template of their own that nobody there
+     * ever used.
+     */
+    private function assertTemplateBelongsToTenant(TenantContext $ctx, ?int $templateId): void
+    {
+        if ($templateId === null) {
+            return;
+        }
+
+        $st = $this->pdo->prepare(
+            'SELECT 1 FROM contract_templates WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
+        );
+        $st->execute([$templateId, $ctx->environment, $ctx->cmpId]);
+
+        if ($st->fetchColumn() === false) {
+            throw new \App\Support\ValidationFailed(['template_id' => 'Choose a template from your own list.']);
+        }
+    }
+
+    private function assertRequestBelongsToTenant(TenantContext $ctx, ?int $requestId): void
+    {
+        if ($requestId === null) {
+            return;
+        }
+
+        $st = $this->pdo->prepare(
+            'SELECT 1 FROM contract_requests WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
+        );
+        $st->execute([$requestId, $ctx->environment, $ctx->cmpId]);
+
+        if ($st->fetchColumn() === false) {
+            throw new \App\Support\ValidationFailed(['request_id' => 'Choose a request from your own list.']);
         }
     }
 

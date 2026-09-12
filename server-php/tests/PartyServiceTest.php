@@ -24,6 +24,7 @@ use App\Core\Http;
 use App\Modules\Contacts\ContactsClient;
 use App\Services\PartyService;
 use App\Support\DomainException;
+use App\Support\Permissions;
 
 $pdo = t_database();
 if ($pdo === null) {
@@ -394,6 +395,52 @@ assert_throws(
 // The party rows themselves are untouched by any of that.
 assert_same('Acme Industries Private Limited', $parties->find($ctx1, (int) $acme['id'])['display_name'], 'the party survived every attempt');
 assert_count(2, $parties->snapshots($ctx1, (int) $acme['id']), 'and so did its evidence');
+
+// ---------------------------------------------------------------------------
+// Contract visibility — same company is not the same thing as visible
+// ---------------------------------------------------------------------------
+//
+// A colleague inside company 1 with the ordinary read grant and no stake in
+// $contract (not its owner, not its creator, not routed to it for approval).
+// ContractController would 404 them off $contract itself; PartyService must
+// refuse the same way, or the counterparty's signatory name, email and phone
+// are reachable straight through the party and snapshot endpoints.
+$colleague = t_context(
+    cmpId: 1,
+    uuid: 'COLLEAGUE',
+    permissions: [Permissions::CONTRACT_VIEW],
+);
+
+assert_throws(
+    static fn () => $parties->listForContract($colleague, $contract),
+    'a colleague without view_all and no stake in the contract sees none of its parties',
+    'not found'
+);
+assert_null(
+    $parties->find($colleague, (int) $acme['id']),
+    "the counterparty's signatory details do not leak by party id either"
+);
+assert_throws(
+    static fn () => $parties->snapshots($colleague, (int) $acme['id']),
+    'nor does the snapshot history — the evidence of who signed and how to reach them',
+    'not found'
+);
+
+// A user holding contract.view_all sees it regardless, as the repository does
+// — worth pinning separately, because a check that refused everyone would
+// pass the assertions above too.
+$auditor = t_context(
+    cmpId: 1,
+    uuid: 'AUDITOR',
+    permissions: [Permissions::CONTRACT_VIEW, Permissions::CONTRACT_VIEW_ALL],
+);
+assert_count(2, $parties->listForContract($auditor, $contract), 'contract.view_all sees every party, as the repository does');
+assert_not_null($parties->find($auditor, (int) $acme['id']), 'and can open one by id');
+assert_count(2, $parties->snapshots($auditor, (int) $acme['id']), 'and read its snapshot history');
+
+// The contract's own owner must still see it — the fix narrows a colleague's
+// reach, not the owner's.
+assert_count(2, $parties->listForContract($ctx1, $contract), 'the owner still sees every party on their own contract');
 
 Http::setTransportForTests(null);
 

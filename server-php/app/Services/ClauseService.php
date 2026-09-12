@@ -1115,22 +1115,17 @@ final class ClauseService
     }
 
     /**
-     * The contract exists for this tenant.
+     * The contract exists for this tenant, and this caller may see it.
      *
-     * By id only, and answered as "not found": a caller walking contract ids
-     * must not be able to tell another company's contract from one that was
-     * never created.
+     * Delegates to ContractService::findOrFail() rather than a bare tenant
+     * check: the clause body is the substance of the agreement, and a user
+     * without CONTRACT_VIEW_ALL who cannot open the contract itself must not
+     * be able to read what it says by knowing its id. Same rule DocumentService
+     * and CommentService apply to a contract's documents and comments.
      */
     private function assertContract(TenantContext $ctx, int $contractId): void
     {
-        $st = $this->pdo->prepare(
-            'SELECT 1 FROM contracts WHERE id = ? AND environment = ? AND cmp_id = ? LIMIT 1'
-        );
-        $st->execute([$contractId, $ctx->environment, $ctx->cmpId]);
-
-        if ($st->fetchColumn() === false) {
-            throw DomainException::notFound('Contract not found.');
-        }
+        (new ContractService($this->pdo))->findOrFail($ctx, $contractId);
     }
 
     /** @throws ValidationFailed */

@@ -174,6 +174,47 @@ assert_throws(
     'your own list'
 );
 
+// A template and a request are the same class of mistake: pointing a contract
+// at either from another company is a cross-tenant reference the FK alone
+// would accept, and it would also make company 2's own, otherwise-unused
+// template permanently undeletable (TemplateService counts contracts by
+// template_id with no tenant filter).
+$bobTemplate = (new \App\Services\TemplateService($pdo))->create($bob, [
+    'name' => "Bob's NDA template",
+    'body' => 'Body text',
+]);
+$bobTemplateId = (int) $bobTemplate['id'];
+
+assert_throws(
+    static fn () => $service->create($alice, [
+        'title'       => 'Borrowing another company template',
+        'template_id' => $bobTemplateId,
+    ]),
+    "company 1 cannot reference company 2's template",
+    'your own list'
+);
+assert_same(
+    0,
+    (new \App\Services\TemplateService($pdo))->find($bob, $bobTemplateId)['contract_count'],
+    "company 2's template is still unused after company 1's rejected attempt"
+);
+
+$requestSt = $pdo->prepare(
+    'INSERT INTO contract_requests (environment, cmp_id, request_number, title, requester_uuid)
+     VALUES (?, ?, ?, ?, ?) RETURNING id'
+);
+$requestSt->execute(['sandbox', 2, 'REQ-BOB-0001', "Bob's request", 'BOB']);
+$bobRequestId = (int) $requestSt->fetchColumn();
+
+assert_throws(
+    static fn () => $service->create($alice, [
+        'title'      => 'Borrowing another company request',
+        'request_id' => $bobRequestId,
+    ]),
+    "company 1 cannot reference company 2's request",
+    'your own list'
+);
+
 // --- Row-level visibility within one company --------------------------------
 // A user without CONTRACT_VIEW_ALL sees only what they own or are involved in.
 // This is not a tenant boundary but it is the same class of mistake.
