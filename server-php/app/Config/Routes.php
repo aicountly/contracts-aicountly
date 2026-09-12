@@ -73,6 +73,7 @@ $router->group('/api', function (Router $r): void {
     $r->post('/uploads/direct', 'Api\DocumentController@directUpload');
     $r->post('/documents/link', 'Api\DocumentController@linkDriveFile');
     $r->get('/versions/{id}/url', 'Api\DocumentController@versionUrl');
+    $r->get('/versions/{id}/file', 'Api\DocumentController@versionFile');
     $r->get('/versions/{id}/text', 'Api\DocumentController@versionText');
     $r->post('/versions/{id}/executed', 'Api\DocumentController@markExecuted');
     $r->delete('/versions/{id}', 'Api\DocumentController@destroyVersion');

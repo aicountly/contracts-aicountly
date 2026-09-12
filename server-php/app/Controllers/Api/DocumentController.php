@@ -10,6 +10,7 @@ use App\Core\Response;
 use App\Services\ContractService;
 use App\Services\DiffService;
 use App\Services\DocumentService;
+use App\Modules\Drive\LocalStorageAdapter;
 use App\Services\TextExtractionService;
 use App\Support\DomainException;
 use App\Support\Enums;
@@ -293,6 +294,83 @@ final class DocumentController extends BaseController
         $inline = in_array(strtolower((string) (Request::query('inline') ?? '')), ['1', 'true', 'yes'], true);
 
         $this->respond(fn () => $this->documents()->signedUrl($ctx, $versionId, $inline));
+    }
+
+    /**
+     * The bytes a signed local-storage link points at.
+     *
+     * `LocalStorageAdapter::signedUrl()` mints links to this route for a
+     * deployment running without Drive. It has no session: a signed link is
+     * handed to a browser tab or an `<iframe>` and has to work without the
+     * custom headers a session-authenticated request carries, so the security
+     * is the token, not `requireContext()`.
+     *
+     * @audit-unauthenticated the caller has no session; authenticity comes
+     *   from verifying the HMAC token that `signedUrl()` signed at the moment
+     *   a permission-checked, visibility-checked request minted it. The token
+     *   binds the version id, the inline flag and its own expiry — not the
+     *   tenant — so the version row is loaded by id alone rather than through
+     *   a tenant-scoped lookup. That is not a gap: the check that matters
+     *   already ran once, when `versionUrl()` decided this caller could have
+     *   a link to this version at all. Verifying it again here would need a
+     *   session the whole point of this route is to work without.
+     */
+    public function versionFile(?string $id = null): void
+    {
+        $versionId = $this->intId($id);
+
+        $adapter = LocalStorageAdapter::make();
+        if ($adapter === null) {
+            // Not configured, or Drive is the active adapter today. Either
+            // way there is nothing this route can serve — Drive's own signed
+            // URLs point at Drive's own domain and never reach here.
+            Response::notFound();
+        }
+
+        $expiresAt = (int) (Request::query('expires') ?? 0);
+        $inline    = Request::query('inline') === '1';
+        $token     = (string) (Request::query('token') ?? '');
+
+        if ($token === '' || ! LocalStorageAdapter::verifyViewToken($versionId, $inline, $expiresAt, $token)) {
+            Response::error('LINK_EXPIRED', 'This link has expired or is no longer valid.', 410);
+        }
+
+        $version = $this->run(fn () => $this->documents()->findVersionRaw($versionId));
+        if ($version === null) {
+            Response::notFound();
+        }
+
+        // No TenantContext exists on this path — see the docblock above — but
+        // the local adapter's readBytes() never reads one; only Drive's does,
+        // and Drive never routes a request here.
+        $anonymous = new TenantContext(
+            uuid: '',
+            sesKey: '',
+            cmpId: (int) $version['cmp_id'],
+            fyId: 0,
+            boId: 0,
+            environment: (string) $version['environment'],
+        );
+
+        $bytes = $adapter->readBytes($anonymous, $version);
+        if ($bytes === null) {
+            Response::notFound();
+        }
+
+        $filename = (string) ($version['filename'] ?? 'document');
+        $mime     = (string) ($version['content_type'] ?? 'application/octet-stream');
+
+        header('Content-Type: ' . $mime);
+        header('Content-Length: ' . (string) strlen($bytes));
+        header(sprintf(
+            'Content-Disposition: %s; filename="%s"',
+            $inline ? 'inline' : 'attachment',
+            str_replace('"', '', $filename)
+        ));
+        header('Cache-Control: private, max-age=0, no-store');
+        header('X-Content-Type-Options: nosniff');
+        echo $bytes;
+        exit;
     }
 
     public function versionText(?string $id = null): void

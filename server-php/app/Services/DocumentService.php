@@ -746,6 +746,28 @@ final class DocumentService
         return is_array($row) ? $row : null;
     }
 
+    /**
+     * A version row by id alone, for the one caller with no TenantContext.
+     *
+     * @audit-unscoped DocumentController::versionFile() serves a signed local-
+     *   storage link and has no session — see its own docblock. The token it
+     *   verified before calling this already proved the requester was
+     *   authorised when the link was minted; there is no tenant to scope a
+     *   second check by, and none is needed.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function findVersionRaw(int $versionId): ?array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT * FROM contract_document_versions WHERE id = ? LIMIT 1'
+        );
+        $st->execute([$versionId]);
+        $row = $st->fetch();
+
+        return is_array($row) ? $row : null;
+    }
+
     /** @return array<string,mixed> @throws DomainException */
     public function findVersionOrFail(TenantContext $ctx, int $versionId): array
     {

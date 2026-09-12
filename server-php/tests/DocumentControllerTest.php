@@ -287,6 +287,193 @@ $body   = Response::lastForTests();
 assert_same(422, $status, 'omitting filename/content_type is still a validation error, not silently accepted');
 assert_true(isset($body['body']['errors']['filename']), 'the missing field is named');
 
+// ---------------------------------------------------------------------------
+// Finding (LocalStorageAdapter group): signedUrl() must point at a route
+// that actually exists and actually serves the bytes it promises.
+//
+// versionFile() has no session -- see its own docblock -- so it cannot be
+// driven through dc_call()'s in-process ReflectionClass trick on its success
+// path, which ends in a raw header()/echo/exit rather than a testable
+// ResponseSent (the same reason CSV export controllers in this codebase are
+// tested via their static toCsv() helper rather than through the controller
+// action). A real out-of-process HTTP server proves what actually matters --
+// that the route is wired, the token is verified, and real bytes come back --
+// without needing PHP's own exit() to cooperate with a test harness. Env
+// vars, not the shared .env, turn local storage on for this one child
+// process so the live dev server other tests may be using stays untouched.
+$fileTestPort = 21000 + (getmypid() % 9000);
+$fileTestRoot = sys_get_temp_dir() . '/ctr-versionfile-test-' . bin2hex(random_bytes(4));
+mkdir($fileTestRoot, 0700, true);
+
+$fileServer = proc_open(
+    [PHP_BINARY, '-S', "127.0.0.1:{$fileTestPort}", 'index.php'],
+    [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+    $fileServerPipes,
+    __DIR__ . '/..',
+    array_merge(array_filter($_SERVER, 'is_string'), [
+        'CONTRACTS_ALLOW_LOCAL_STORAGE' => 'true',
+        'CONTRACTS_LOCAL_STORAGE_PATH'  => $fileTestRoot,
+    ])
+);
+
+if ($fileServer === false) {
+    fwrite(STDERR, "  SKIP  versionFile(): could not spawn a loopback server (proc_open unavailable)
+");
+} else {
+    register_shutdown_function(static function () use ($fileServer, $fileServerPipes): void {
+        if (is_resource($fileServer)) {
+            proc_terminate($fileServer);
+            foreach ($fileServerPipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+            proc_close($fileServer);
+        }
+    });
+
+    $fileBase = "http://127.0.0.1:{$fileTestPort}/index.php";
+    $deadline = microtime(true) + 5.0;
+    $up = false;
+    while (microtime(true) < $deadline) {
+        $probe = @fsockopen('127.0.0.1', $fileTestPort, $errno, $errstr, 0.2);
+        if ($probe !== false) {
+            fclose($probe);
+            $up = true;
+            break;
+        }
+        usleep(50000);
+    }
+
+    if (! $up) {
+        fwrite(STDERR, "  SKIP  versionFile(): loopback server did not come up in time
+");
+    } else {
+        // Real bytes, a real upload session, a real finalize -- through the
+        // isolated server's own local adapter, not the shared one.
+        $localForFileTest = LocalStorageAdapter::make(); // reads this PROCESS's env, not the child's
+        // (irrelevant here -- only used to build the fixture contract below)
+
+        $fileBytes = "%PDF-1.4
+versionFile end-to-end test
+%%EOF";
+
+        // The child server has no live portal to validate a session key
+        // against, so a real create/finalize round trip through the API would
+        // need one. The version row is built directly instead, exactly as a
+        // completed local-storage upload would leave it, against the SAME
+        // database the child server reads -- then the only thing actually
+        // under test runs for real: GET /versions/{id}/file, hit
+        // unauthenticated exactly as a browser would, must return the right
+        // bytes for a valid token and refuse a forged or expired one.
+        $extension = 'pdf';
+        $storageName = bin2hex(random_bytes(8)) . '.' . $extension;
+        $relative = 'sandbox/1/' . date('Y/m') . '/' . $storageName;
+        $absolute = $fileTestRoot . '/' . $relative;
+        mkdir(dirname($absolute), 0700, true);
+        file_put_contents($absolute, $fileBytes);
+
+        $docSt = $pdo->prepare(
+            "INSERT INTO contract_documents (environment, cmp_id, contract_id, doc_kind, title, created_by)
+             VALUES ('sandbox', 1, ?, 'contract', 'End to end test document', 'USER-A') RETURNING id"
+        );
+        $docSt->execute([$contractId]);
+        $fileTestDocId = (int) $docSt->fetchColumn();
+
+        $verSt = $pdo->prepare(
+            "INSERT INTO contract_document_versions
+                (environment, cmp_id, document_id, version_no, version_status, source,
+                 filename, content_type, size_bytes, storage_provider, local_path, uploaded_by)
+             VALUES ('sandbox', 1, ?, 1, 'internal_draft', 'internal',
+                     'agreement.pdf', 'application/pdf', ?, 'local', ?, 'USER-A')
+             RETURNING id"
+        );
+        $verSt->execute([$fileTestDocId, strlen($fileBytes), $relative]);
+        $fileTestVersionId = (int) $verSt->fetchColumn();
+
+        // signViewToken()'s fallback secret is derived in part from
+        // rootPath(), so a token minted in THIS process must see the same
+        // CONTRACTS_LOCAL_STORAGE_PATH the child server was given, or the two
+        // processes sign with different secrets and every token 410s.
+        Env::configureForTests(['CONTRACTS_LOCAL_STORAGE_PATH' => $fileTestRoot]);
+
+        $expires = time() + 900;
+        $goodToken = LocalStorageAdapter::signViewToken($fileTestVersionId, true, $expires);
+        $goodUrl = sprintf(
+            '%s/versions/%d/file?expires=%d&inline=1&token=%s',
+            $fileBase,
+            $fileTestVersionId,
+            $expires,
+            $goodToken
+        );
+
+        $ch = curl_init($goodUrl);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => true, CURLOPT_TIMEOUT => 5]);
+        $raw = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        assert_same(200, $httpCode, 'a link signed with a valid, unexpired token serves the file instead of 404 ROUTE_NOT_FOUND');
+        assert_true(is_string($raw) && str_contains($raw, $fileBytes), 'the response body is exactly the stored bytes, not a redirect or an error envelope');
+        assert_true(str_contains((string) $raw, 'Content-Type: application/pdf'), 'the content type the version was stored with is echoed back');
+        assert_true(
+            str_contains((string) $raw, 'Content-Disposition: inline'),
+            "inline=1 on the link produces an inline disposition, not a forced download"
+        );
+
+        // A tampered token must be refused, not served.
+        $badUrl = sprintf(
+            '%s/versions/%d/file?expires=%d&inline=1&token=%s',
+            $fileBase,
+            $fileTestVersionId,
+            $expires,
+            'not-the-real-token'
+        );
+        $ch = curl_init($badUrl);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5]);
+        curl_exec($ch);
+        $badCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        assert_same(410, $badCode, 'a forged token is refused rather than serving the file');
+
+        // An expired token must be refused even if it was signed correctly.
+        $expiredToken = LocalStorageAdapter::signViewToken($fileTestVersionId, true, time() - 10);
+        $expiredUrl = sprintf(
+            '%s/versions/%d/file?expires=%d&inline=1&token=%s',
+            $fileBase,
+            $fileTestVersionId,
+            time() - 10,
+            $expiredToken
+        );
+        $ch = curl_init($expiredUrl);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5]);
+        curl_exec($ch);
+        $expiredCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        assert_same(410, $expiredCode, 'an expired link is refused even though its signature is valid');
+
+        t_ok('versionFile() serves a valid signed link and refuses a forged or expired one, out of process');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The route resolves even where local storage is off: proves the
+// routing/controller wiring independent of the isolated server above, and
+// distinguishes "not configured" (NOT_FOUND) from "route does not exist"
+// (ROUTE_NOT_FOUND), which is the actual bug this closes. Explicitly turned
+// off here -- earlier sections of this file left it on for the upload
+// findings above, and Env::configureForTests() has no "unset".
+// ---------------------------------------------------------------------------
+Env::configureForTests(['CONTRACTS_ALLOW_LOCAL_STORAGE' => 'false']);
+$status = dc_call(new DocumentController(), $ctx, fn (DocumentController $c) => $c->versionFile('999999'));
+$body   = Response::lastForTests();
+assert_same(404, $status, 'GET /versions/{id}/file resolves to a route (not a router 404) even when local storage is off');
+assert_same(
+    'NOT_FOUND',
+    $body['body']['error'] ?? null,
+    "the 404 is versionFile()'s own 'not configured/not found', not the router's ROUTE_NOT_FOUND -- the route exists now"
+);
+
 t_done('DocumentControllerTest');
 
 }
