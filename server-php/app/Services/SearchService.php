@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\ContractVisibility;
 use App\Core\Database;
 use App\Support\Permissions;
 use App\Support\TenantContext;
@@ -309,19 +310,7 @@ final class SearchService
      */
     private function visibility(TenantContext $ctx): array
     {
-        if ($ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
-            return ['', []];
-        }
-
-        return [
-            'AND (c.owner_uuid = :vis1 OR c.created_by = :vis2
-                  OR EXISTS (
-                      SELECT 1 FROM contract_approval_assignments a
-                      JOIN contract_approval_instances i ON i.id = a.instance_id
-                      WHERE i.contract_id = c.id AND a.approver_uuid = :vis3
-                  ))',
-            ['vis1' => $ctx->uuid, 'vis2' => $ctx->uuid, 'vis3' => $ctx->uuid],
-        ];
+        return ContractVisibility::predicate($ctx);
     }
 
     /**

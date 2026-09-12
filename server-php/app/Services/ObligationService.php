@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\Database;
+use App\Support\ContractVisibility;
 use App\Support\Dates;
 use App\Support\DomainException;
 use App\Support\Enums;
@@ -751,6 +752,24 @@ final class ObligationService
     {
         $clauses = ['occ.environment = :env', 'occ.cmp_id = :cmp'];
         $params  = ['env' => $ctx->environment, 'cmp' => $ctx->cmpId];
+
+        // Tenant scope alone is not enough here. The register selects the
+        // contract number and title beside every occurrence, so without the
+        // narrowing a user who may only see their own contracts is shown the
+        // name of every contract in the company that happens to carry an
+        // obligation. Expressed as an EXISTS over occ.contract_id rather than
+        // a join, because the count query does not join contracts and adding
+        // the join only to narrow it would change what that query is about.
+        [$visibility, $visibilityParams] = ContractVisibility::existsFor($ctx, 'occ.contract_id', 'occvis');
+        if ($visibility !== '') {
+            // The helper returns a fragment already prefixed with AND; this
+            // list is joined with AND, so the prefix is removed. Anchored
+            // rather than ltrim'd with a character list — that would eat any
+            // leading A, N or D and silently corrupt a fragment that one day
+            // starts with a different word.
+            $clauses[] = (string) preg_replace('/^\s*AND\s+/i', '', $visibility);
+            $params    = array_merge($params, $visibilityParams);
+        }
 
         $statuses = $f['status'] ?? null;
         if (is_string($statuses) && $statuses !== '') {

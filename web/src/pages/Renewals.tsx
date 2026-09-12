@@ -49,6 +49,7 @@ import { formatDate, formatMoney, humanise } from '../utils/format'
 const SEARCH_DEBOUNCE_MS = 300
 
 const BUCKETS: { id: RenewalBucket; label: string; hint: string }[] = [
+  { id: 'decision_due', label: 'Decision due', hint: 'The review window has opened and nobody has decided' },
   { id: 'notice_due', label: 'Notice deadline approaching', hint: 'The window to serve notice is closing' },
   { id: 'auto_renewal_risk', label: 'Auto-renewal risk', hint: 'Renews itself unless somebody acts' },
   { id: 'expiring_30', label: 'Expiring in 30 days', hint: 'Ends within a month' },
@@ -58,6 +59,11 @@ const BUCKETS: { id: RenewalBucket; label: string; hint: string }[] = [
 ]
 
 const BUCKET_EMPTY: Record<RenewalBucket, { title: string; description: string }> = {
+  decision_due: {
+    title: 'Nothing is waiting on a decision',
+    description:
+      'No renewal cycle has an open review window without a decision recorded against it. This is the bucket the dashboard tile counts.',
+  },
   notice_due: {
     title: 'No notice deadline is close',
     description:

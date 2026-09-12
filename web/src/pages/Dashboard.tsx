@@ -227,7 +227,7 @@ export default function Dashboard() {
           <KpiTile
             label="Renewals due"
             value={count(kpis.data?.renewals_due)}
-            to="/renewals?bucket=due"
+            to="/renewals?bucket=decision_due"
             icon={RefreshCw}
             tone="warning"
             note="Decision window open"

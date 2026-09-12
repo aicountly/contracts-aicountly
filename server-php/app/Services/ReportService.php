@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\Database;
+use App\Support\ContractVisibility;
 use App\Support\DomainException;
 use App\Support\Enums;
 use App\Support\Permissions;
@@ -1002,16 +1003,10 @@ final class ReportService
         $where  = ['c.environment = :env', 'c.cmp_id = :cmp'];
         $params = ['env' => $ctx->environment, 'cmp' => $ctx->cmpId];
 
-        if (! $ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
-            $where[] = '(c.owner_uuid = :me1 OR c.created_by = :me2
-                         OR EXISTS (
-                             SELECT 1 FROM contract_approval_assignments aa
-                             JOIN contract_approval_instances ai ON ai.id = aa.instance_id
-                             WHERE ai.contract_id = c.id AND aa.approver_uuid = :me3
-                         ))';
-            $params['me1'] = $ctx->uuid;
-            $params['me2'] = $ctx->uuid;
-            $params['me3'] = $ctx->uuid;
+        [$visibility, $visibilityParams] = ContractVisibility::predicate($ctx, 'c', 'me', false);
+        if ($visibility !== '') {
+            $where[] = $visibility;
+            $params  = array_merge($params, $visibilityParams);
         }
 
         if (! empty($f['bo_id'])) {

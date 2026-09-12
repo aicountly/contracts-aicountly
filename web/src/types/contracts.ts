@@ -865,6 +865,7 @@ export type RenewalRecommendation = 'renew' | 'renegotiate' | 'terminate' | 'rev
 /** The `bucket` values `GET /renewals` understands. */
 export type RenewalBucket =
   | 'all'
+  | 'decision_due'
   | 'expiring_30'
   | 'expiring_60'
   | 'expiring_90'

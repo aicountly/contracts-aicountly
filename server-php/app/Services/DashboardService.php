@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\ContractVisibility;
 use App\Core\Database;
 use App\Support\Dates;
 use App\Support\Enums;
@@ -1058,28 +1059,10 @@ final class DashboardService
      */
     private function visibility(TenantContext $ctx): array
     {
-        if ($ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
-            return ['', []];
-        }
-
-        // Three names for one value: with prepare emulation off PDO gives every
-        // named placeholder its own position, so a name used twice in one
-        // statement is a bound-parameter mismatch rather than a convenience.
-        return [
-            '(c.owner_uuid = :vis_self
-                    OR c.created_by = :vis_self2
-                    OR EXISTS (
-                           SELECT 1
-                           FROM contract_approval_assignments a
-                           JOIN contract_approval_instances i ON i.id = a.instance_id
-                           WHERE i.contract_id = c.id AND a.approver_uuid = :vis_self3
-                       ))',
-            [
-                'vis_self'  => $ctx->uuid,
-                'vis_self2' => $ctx->uuid,
-                'vis_self3' => $ctx->uuid,
-            ],
-        ];
+        // No leading AND: this one is collected into a clause list that is
+        // joined with AND, unlike the repository's, which is appended to a
+        // WHERE already under construction.
+        return ContractVisibility::predicate($ctx, 'c', 'vis', false);
     }
 
     /**

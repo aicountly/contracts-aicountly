@@ -766,6 +766,15 @@ final class RenewalService
                 $params['lead'] = $lead;
                 break;
 
+            // What the dashboard's "Renewals due" tile counts, expressed once
+            // here so the tile and the list it drills into cannot disagree.
+            // Before this existed the tile linked to a bucket name the switch
+            // did not know, which fell through to `all` — so a count of three
+            // opened a list of every renewal cycle in the company.
+            case 'decision_due':
+                $clauses[] = "r.status IN ('review_due', 'under_review') AND r.decision IS NULL";
+                break;
+
             case 'all':
             default:
                 break;

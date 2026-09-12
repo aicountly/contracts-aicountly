@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\ContractVisibility;
 use App\Core\Database;
 use App\Support\Dates;
 use App\Support\DomainException;
@@ -121,24 +122,7 @@ final class ContractService
      */
     private function visibilityPredicate(TenantContext $ctx): array
     {
-        if ($ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
-            return ['', []];
-        }
-
-        $sql = ' AND (c.owner_uuid = :vis_self
-                      OR c.created_by = :vis_self2
-                      OR EXISTS (
-                          SELECT 1
-                          FROM contract_approval_assignments a
-                          JOIN contract_approval_instances i ON i.id = a.instance_id
-                          WHERE i.contract_id = c.id AND a.approver_uuid = :vis_self3
-                      ))';
-
-        return [$sql, [
-            'vis_self'  => $ctx->uuid,
-            'vis_self2' => $ctx->uuid,
-            'vis_self3' => $ctx->uuid,
-        ]];
+        return ContractVisibility::predicate($ctx);
     }
 
     /** @return array<string,mixed> @throws DomainException */
