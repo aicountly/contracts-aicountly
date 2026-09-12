@@ -288,7 +288,23 @@ final class ApprovalService
                 );
             }
 
-            $this->setContractApproval($ctx, $contractId, 'pending', 'awaiting_approval');
+            $this->setContractApproval($ctx, $contractId, 'pending');
+
+            // The pre-check above ran before the transaction opened and before
+            // the contract row was locked; this repeats it under the lock so a
+            // racing status change cannot leave an approval instance open on a
+            // contract that never actually reached awaiting_approval.
+            if ($contractId !== null && ! $this->moveContract(
+                $ctx,
+                $contractId,
+                'awaiting_approval',
+                sprintf('Sent for approval via %s', (string) $workflow['name'])
+            )) {
+                throw DomainException::conflict(
+                    sprintf('A %s contract cannot be sent for approval.', Enums::label((string) ($contract['status'] ?? ''))),
+                    'INVALID_STATUS_TRANSITION'
+                );
+            }
 
             $this->audit->log($ctx, 'approval', $instanceId, 'approval.submitted', $contractId, [
                 'workflow'     => ['from' => null, 'to' => (string) $workflow['name']],
@@ -345,6 +361,29 @@ final class ApprovalService
 
             $stepNo     = (int) $instance['current_step'];
             $contractId = $instance['contract_id'] === null ? null : (int) $instance['contract_id'];
+
+            if ($contractId !== null) {
+                $st = $pdo->prepare(
+                    'SELECT status FROM contracts WHERE id = ? AND environment = ? AND cmp_id = ? FOR UPDATE'
+                );
+                $st->execute([$contractId, $ctx->environment, $ctx->cmpId]);
+                $contractStatus = $st->fetchColumn();
+
+                // The contract sits in awaiting_approval for exactly as long as
+                // this run is open — submit() puts it there and approve() /
+                // closeReturning() are the only routes back out. Anywhere else
+                // means another route (an edit, a termination, a second
+                // submission) already moved it on, and this run is deciding a
+                // question that no longer applies; cancel() is how it is
+                // cleared, not act().
+                if ($contractStatus !== false && (string) $contractStatus !== 'awaiting_approval') {
+                    throw DomainException::conflict(
+                        'This contract has moved on since the approval was opened; the run is stale. Cancel it instead.',
+                        'APPROVAL_STALE'
+                    );
+                }
+            }
+
             $assignment = $this->pendingAssignment($ctx, $instanceId, $stepNo, $ctx->uuid);
             $isAdmin    = $this->isApprovalAdmin($ctx);
 
@@ -412,7 +451,16 @@ final class ApprovalService
             // fine, it simply is not in an approval any more, and a leftover
             // terminal approval_status would keep it out of every "needs
             // approval" list forever.
-            $this->setContractApproval($ctx, $contractId, 'not_required', 'draft');
+            $this->setContractApproval($ctx, $contractId, 'not_required');
+            if ($contractId !== null) {
+                // Best-effort and silent on refusal, unlike act(): cancel is the
+                // way to clear a run whose contract already moved on through
+                // another route, and it must still close the run when that move
+                // is not one the graph will take back (a terminated contract
+                // does not reopen to draft just because its stale approval was
+                // cancelled).
+                $this->moveContract($ctx, $contractId, 'draft', $reason);
+            }
 
             $this->audit->log($ctx, 'approval', $instanceId, 'approval.cancelled', $contractId, [
                 'status' => ['from' => (string) $instance['status'], 'to' => 'cancelled'],
@@ -672,7 +720,13 @@ final class ApprovalService
         }
 
         $this->closeInstance($ctx, $instanceId, 'approved', $comment);
-        $this->setContractApproval($ctx, $contractId, 'approved', 'approved');
+        $this->setContractApproval($ctx, $contractId, 'approved');
+        if ($contractId !== null) {
+            // Guaranteed to be allowed: act()'s staleness check has already
+            // confirmed the contract is still awaiting_approval, under the same
+            // row lock, and awaiting_approval -> approved is always permitted.
+            $this->moveContract($ctx, $contractId, 'approved', $comment ?? 'Approved');
+        }
 
         $this->audit->log($ctx, 'approval', $instanceId, 'approval.approved', $contractId, [
             'status' => ['from' => (string) $instance['status'], 'to' => 'approved'],
@@ -715,7 +769,16 @@ final class ApprovalService
         $this->recordAction($ctx, $instanceId, $assignmentId, $stepNo, $action, $comment);
         $this->skipPending($ctx, $instanceId, null);
         $this->closeInstance($ctx, $instanceId, $instanceStatus, $comment);
-        $this->setContractApproval($ctx, $contractId, $approvalStatus, 'draft');
+        $this->setContractApproval($ctx, $contractId, $approvalStatus);
+        if ($contractId !== null) {
+            // Guaranteed to be allowed, for the same reason as approve()'s move.
+            $this->moveContract(
+                $ctx,
+                $contractId,
+                'draft',
+                $comment ?? ($action === 'reject' ? 'Contract rejected' : 'Contract returned for changes')
+            );
+        }
 
         $this->audit->log($ctx, 'approval', $instanceId, 'approval.' . $action, $contractId, [
             'status'  => ['from' => (string) $instance['status'], 'to' => $instanceStatus],
@@ -962,35 +1025,52 @@ final class ApprovalService
         ]);
     }
 
-    private function setContractApproval(TenantContext $ctx, ?int $contractId, string $approvalStatus, ?string $status): void
+    /**
+     * Write the contract's approval_status only.
+     *
+     * The contract's own status is never written here — see moveContract().
+     * A raw UPDATE on contracts.status would skip transitionAllowed(), the
+     * contract.status_changed audit row and the contract.status.* activity
+     * entry that ContractService::changeStatus writes for every other route
+     * into a status, exactly what SignatureService's and TerminationService's
+     * own docblocks single out as forbidden.
+     */
+    private function setContractApproval(TenantContext $ctx, ?int $contractId, string $approvalStatus): void
     {
         if ($contractId === null) {
             return;
         }
 
-        if ($status === null) {
-            $this->pdo->prepare(
-                'UPDATE contracts SET approval_status = ?, updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND environment = ? AND cmp_id = ?'
-            )->execute([$approvalStatus, $contractId, $ctx->environment, $ctx->cmpId]);
+        $this->pdo->prepare(
+            'UPDATE contracts SET approval_status = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND environment = ? AND cmp_id = ?'
+        )->execute([$approvalStatus, $contractId, $ctx->environment, $ctx->cmpId]);
+    }
 
-            return;
+    /**
+     * Move the contract, but only where the lifecycle graph allows it.
+     *
+     * The only way approval ever changes contracts.status, and it goes through
+     * ContractService::changeStatus so the transition graph, the audit row and
+     * the activity entry all run — the same pattern SignatureService::moveContract
+     * uses for execution. Returns whether the move happened instead of
+     * throwing, so cancel() can close a run whose contract has already moved
+     * on without forcing it back through a transition the graph refuses; act()
+     * checks the contract's status itself before ever reaching here, so for
+     * approve() and closeReturning() the move is always allowed.
+     */
+    private function moveContract(TenantContext $ctx, int $contractId, string $to, ?string $note): bool
+    {
+        $contracts = new ContractService($this->pdo);
+        $current   = (string) $contracts->findOrFail($ctx, $contractId)['status'];
+
+        if ($current === $to || ! ContractService::transitionAllowed($current, $to)) {
+            return false;
         }
 
-        $this->pdo->prepare(
-            'UPDATE contracts
-             SET approval_status = ?, status = ?, lifecycle_stage = ?,
-                 updated_by = ?, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND environment = ? AND cmp_id = ?'
-        )->execute([
-            $approvalStatus,
-            $status,
-            ContractService::stageForStatus($status),
-            $ctx->uuid,
-            $contractId,
-            $ctx->environment,
-            $ctx->cmpId,
-        ]);
+        $contracts->changeStatus($ctx, $contractId, $to, $note);
+
+        return true;
     }
 
     // -----------------------------------------------------------------------

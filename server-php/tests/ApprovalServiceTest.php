@@ -12,6 +12,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 
 use App\Services\ApprovalService;
+use App\Services\ContractService;
 use App\Services\RoleService;
 use App\Services\WorkflowMatcher;
 use App\Support\Permissions;
@@ -381,6 +382,37 @@ assert_count(1, $escalateActions, 'escalate: one escalate action, not two');
 // The stand-in can act, which is the whole point of escalating.
 $standInDone = $service->act($actor('USER-ESC'), $overdueId, 'approve');
 assert_same(2, $standInDone['current_step'], 'escalate: the stand-in can complete the step');
+
+// --- Stale runs: another route can move the contract on while an approval
+// is still open. The run must not be able to act on it as if nothing had
+// changed, and cancelling it must not reopen a terminal state.
+$contracts = new ContractService($pdo);
+
+$staleContract = $makeContract();
+$staleRun      = $service->submit($ctx, 'contract', $staleContract, null);
+$staleId       = (int) $staleRun['id'];
+
+// Not the approval route — an edit, a signature, a termination — walks the
+// contract on to a terminal state while USER-B's step is still open.
+$contracts->changeStatus($ctx, $staleContract, 'approved', 'test: bypass approval');
+$contracts->changeStatus($ctx, $staleContract, 'active', 'test: bypass to active');
+$contracts->changeStatus($ctx, $staleContract, 'terminated', 'test: bypass to terminated');
+
+assert_same('terminated', $contractStatus($staleContract)['status'], 'stale: the contract is terminated outside the run');
+assert_same(1, $service->myQueue($actor('USER-B'), 20, 0)['total'], 'stale: the stale run is still on the approver\'s queue');
+
+assert_throws(
+    static fn () => $service->act($actor('USER-B'), $staleId, 'approve'),
+    'act: a stale run on a contract that moved on is refused',
+    'moved on'
+);
+assert_same('terminated', $contractStatus($staleContract)['status'], 'act: a refused stale approve leaves the contract terminated');
+assert_same('in_progress', $service->findOrFail($ctx, $staleId)['status'], 'act: a refused stale approve leaves the run open');
+
+$service->cancel($ctx, $staleId, 'Superseded by termination.');
+assert_same('cancelled', $service->findOrFail($ctx, $staleId)['status'], 'cancel: a stale run still closes');
+assert_same('terminated', $contractStatus($staleContract)['status'], 'cancel: cancelling a stale run does not reopen the contract');
+assert_same('not_required', $contractStatus($staleContract)['approval_status'], 'cancel: approval_status still clears on a stale cancel');
 
 // --- Tenant isolation: another company cannot see or act on this run.
 $other = t_context(cmpId: 2, uuid: 'USER-A');

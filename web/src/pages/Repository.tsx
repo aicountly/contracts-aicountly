@@ -149,8 +149,22 @@ function useIsNarrow(): boolean {
   return narrow
 }
 
+const FORMULA_PREFIXES = new Set(['=', '+', '-', '@', '\t', '\r'])
+
+/**
+ * A cell beginning `=`, `+`, `-`, `@`, tab or CR is executed as a formula when
+ * the CSV is opened in a spreadsheet. This is the same guard as
+ * ContractController::toCsv and ReportService::neutraliseFormula on the
+ * server — title and counterparty text reaches this button too, so it needs
+ * the same protection or the guarantee in docs/SECURITY.md doesn't hold here.
+ */
+function neutraliseFormula(text: string): string {
+  if (text === '' || /^-?\d+(\.\d+)?$/.test(text)) return text
+  return FORMULA_PREFIXES.has(text[0]) ? `'${text}` : text
+}
+
 function csvCell(value: string | number | null | undefined): string {
-  const text = value === null || value === undefined ? '' : String(value)
+  const text = neutraliseFormula(value === null || value === undefined ? '' : String(value))
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 

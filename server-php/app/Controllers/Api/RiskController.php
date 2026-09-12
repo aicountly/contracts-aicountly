@@ -56,9 +56,17 @@ final class RiskController extends BaseController
         $this->respond(fn () => (new HealthScoreService($this->db()))->evaluate($ctx, $this->intId($id)));
     }
 
+    /**
+     * Record what a reviewer decided about one finding.
+     *
+     * Deliberately not the grant that lets someone read findings: dismissing a
+     * finding as a false positive (or accepting/mitigating it) rescores the
+     * contract's stored risk level, which is not something a read-only
+     * auditor or reviewer should be able to do.
+     */
     public function reviewFinding(?string $id = null): void
     {
-        $ctx  = $this->requirePermission(Permissions::AI_RISK_VIEW);
+        $ctx  = $this->requireAnyPermission([Permissions::CONTRACT_EDIT, Permissions::SETTINGS_MANAGE]);
         $body = $this->body();
 
         $status = is_string($body['status'] ?? null) ? strtolower(trim($body['status'])) : '';

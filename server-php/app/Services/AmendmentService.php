@@ -428,12 +428,48 @@ final class AmendmentService
                 'cmp'   => $ctx->cmpId,
             ]);
 
+            // The renewal cycle's own current_expiry/notice_deadline are a copy
+            // of these same two facts, kept separately because the nightly sweep
+            // and pipeline() filter on the cycle's columns, never the contract's.
+            // Left unsynced, an amendment that moves either one keeps the cycle
+            // counting down to a date the agreement no longer contains, and the
+            // review it should trigger never fires. Statuses mirror
+            // RenewalService::OPEN_STATUSES: a closed or decided cycle is a
+            // record of what happened and is not moved by a later amendment.
             $pdo->prepare(
+                'UPDATE contract_renewals
+                 SET current_expiry = :expiry, notice_deadline = :deadline,
+                     decision_due_date = COALESCE(:deadline2, decision_due_date),
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE contract_id = :cid AND environment = :env AND cmp_id = :cmp
+                   AND status IN (\'not_yet_due\', \'review_due\', \'under_review\')'
+            )->execute([
+                'expiry'    => $effectiveExpiry,
+                'deadline'  => $params['f_notice_deadline'],
+                'deadline2' => $params['f_notice_deadline'],
+                'cid'       => $contractId,
+                'env'       => $ctx->environment,
+                'cmp'       => $ctx->cmpId,
+            ]);
+
+            // The claim and the stamp are one UPDATE, guarded on the status this
+            // same transaction is about to leave: the contract lock above
+            // serializes two apply() calls on the same contract, but the
+            // amendment's own status was last read before that lock was taken,
+            // so without this guard the second call would recompute `from` off
+            // the contract the first call just amended and overwrite the record
+            // with from === to.
+            $st = $pdo->prepare(
                 'UPDATE contract_amendments
                  SET status = \'executed\', applied_at = CURRENT_TIMESTAMP, applied_by = ?,
                      affected_fields = ?::jsonb, updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND environment = ? AND cmp_id = ?'
-            )->execute([$ctx->uuid, self::encodeObject($applied), $amendmentId, $ctx->environment, $ctx->cmpId]);
+                 WHERE id = ? AND environment = ? AND cmp_id = ? AND status <> \'executed\''
+            );
+            $st->execute([$ctx->uuid, self::encodeObject($applied), $amendmentId, $ctx->environment, $ctx->cmpId]);
+
+            if ($st->rowCount() === 0) {
+                throw DomainException::conflict('This amendment has already been applied.', 'AMENDMENT_ALREADY_APPLIED');
+            }
 
             // One audit row per field, on the contract, so the contract's own
             // trail reads as the sequence of values it has held — the amendment

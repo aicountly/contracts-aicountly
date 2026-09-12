@@ -114,22 +114,20 @@ final class RenewalService
         return $this->openCycle($ctx, $contract, 1, $expiry, $this->termMonthsFor($contract, null));
     }
 
-    /** @return array<string,mixed>|null */
+    /**
+     * @return array<string,mixed>|null
+     */
     public function find(TenantContext $ctx, int $id): ?array
     {
-        $st = $this->pdo->prepare(
-            'SELECT r.*, c.contract_number, c.title AS contract_title, c.status AS contract_status,
-                    c.counterparty_name, c.auto_renewal, c.currency, c.total_value,
-                    c.notice_period_days, c.renewal_type, c.renewal_frequency
-             FROM contract_renewals r
-             JOIN contracts c ON c.id = r.contract_id
-             WHERE r.id = ? AND r.environment = ? AND r.cmp_id = ?
-             LIMIT 1'
-        );
-        $st->execute([$id, $ctx->environment, $ctx->cmpId]);
-        $row = $st->fetch();
+        // The row-level narrowing is applied here as well as in the pipeline
+        // (buildPipelineWhere()). Enforcing it only on the queue would leave a
+        // plain IDOR: a caller without view_all could not see a colleague's
+        // cycle in the pipeline but could still open it directly — and, through
+        // recordDecision(), rewrite the contract's expiry date — by walking the
+        // id in the URL.
+        [$visibility, $visibilityParams] = $this->visibilityClause($ctx);
 
-        return is_array($row) ? $this->hydrate($row) : null;
+        return $this->fetchCycle($id, $ctx->environment, $ctx->cmpId, $visibility, $visibilityParams);
     }
 
     /** @return array<string,mixed> @throws DomainException */
@@ -635,7 +633,12 @@ final class RenewalService
             ['cycle_no' => $cycleNo, 'decision_due_date' => $decisionDue]
         );
 
-        return $this->find($ctx, $id);
+        // Not find(): this echoes the row just inserted under the owner_uuid
+        // this method chose two lines up, which need not be the acting user
+        // (an unowned contract falls back to whoever activated it). Applying
+        // the visibility check to our own insert would just make it invisible
+        // to the request that made it.
+        return $this->fetchCycle($id, $ctx->environment, $ctx->cmpId);
     }
 
     /**
@@ -723,11 +726,12 @@ final class RenewalService
 
         // The row-level half of RBAC, matching ContractService: without
         // view_all a user sees the renewals of contracts they own or run.
-        if (! $ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
-            $clauses[]       = '(c.owner_uuid = :self OR c.created_by = :self2 OR r.owner_uuid = :self3)';
-            $params['self']  = $ctx->uuid;
-            $params['self2'] = $ctx->uuid;
-            $params['self3'] = $ctx->uuid;
+        // Shared with find() via visibilityClause() so a direct read by id can
+        // never be more permissive than this queue.
+        [$visClause, $visParams] = $this->visibilityClause($ctx);
+        if ($visClause !== '') {
+            $clauses[] = $visClause;
+            $params    = array_merge($params, $visParams);
         }
 
         $status = Enums::coerce($f['status'] ?? null, Enums::RENEWAL_STATUSES);
@@ -799,6 +803,64 @@ final class RenewalService
         return ['WHERE ' . implode("\n  AND ", $clauses), $params];
     }
 
+    /**
+     * The row-level half of RBAC, matching ContractService: without
+     * CONTRACT_VIEW_ALL a caller sees only the cycles of contracts they own or
+     * created, plus cycles assigned to them directly — a renewal can be handed
+     * to someone who is neither the contract's owner nor its creator. Shared by
+     * find() and buildPipelineWhere() so a direct read by id can never be more
+     * permissive than the queue it belongs to.
+     *
+     * @return array{0: string, 1: array<string,string>}
+     */
+    private function visibilityClause(TenantContext $ctx, string $prefix = 'vis'): array
+    {
+        if ($ctx->has(Permissions::CONTRACT_VIEW_ALL)) {
+            return ['', []];
+        }
+
+        $self    = $prefix . '_self';
+        $created = $prefix . '_created';
+        $owner   = $prefix . '_owner';
+
+        return [
+            "(c.owner_uuid = :{$self} OR c.created_by = :{$created} OR r.owner_uuid = :{$owner})",
+            [$self => $ctx->uuid, $created => $ctx->uuid, $owner => $ctx->uuid],
+        ];
+    }
+
+    /**
+     * The read behind find(), with the visibility clause left to the caller.
+     * openCycle() and latestCycle() call this directly, unfiltered — see their
+     * own comments for why re-checking visibility there is wrong rather than
+     * merely redundant.
+     *
+     * @param array<string,string> $visibilityParams
+     * @return array<string,mixed>|null
+     */
+    private function fetchCycle(
+        int $id,
+        string $environment,
+        int $cmpId,
+        string $visibility = '',
+        array $visibilityParams = []
+    ): ?array {
+        $st = $this->pdo->prepare(
+            'SELECT r.*, c.contract_number, c.title AS contract_title, c.status AS contract_status,
+                    c.counterparty_name, c.auto_renewal, c.currency, c.total_value,
+                    c.notice_period_days, c.renewal_type, c.renewal_frequency
+             FROM contract_renewals r
+             JOIN contracts c ON c.id = r.contract_id
+             WHERE r.id = :id AND r.environment = :env AND r.cmp_id = :cmp'
+            . ($visibility === '' ? '' : ' AND ' . $visibility) . '
+             LIMIT 1'
+        );
+        $st->execute(array_merge(['id' => $id, 'env' => $environment, 'cmp' => $cmpId], $visibilityParams));
+        $row = $st->fetch();
+
+        return is_array($row) ? $this->hydrate($row) : null;
+    }
+
     /** @return list<int> */
     private function companiesWithCycles(string $environment, ?int $cmpId): array
     {
@@ -845,7 +907,12 @@ final class RenewalService
         $st->execute([$contractId, $ctx->environment, $ctx->cmpId]);
         $id = $st->fetchColumn();
 
-        return $id === false ? null : $this->find($ctx, (int) $id);
+        // Not find(): this only feeds ensureCycle()'s "does a cycle already
+        // exist" check. Narrowing it by visibility would not close any gap —
+        // ensureCycle() is reachable the same way either way — it would only
+        // make an existing cycle invisible to its own idempotency check and
+        // crash the next call on uq_contract_renewal_cycle.
+        return $id === false ? null : $this->fetchCycle((int) $id, $ctx->environment, $ctx->cmpId);
     }
 
     /** @param array<string,mixed> $row @return array<string,mixed> */

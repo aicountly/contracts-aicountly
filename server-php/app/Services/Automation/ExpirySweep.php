@@ -17,9 +17,14 @@ use Throwable;
  * locked into another year of something they wanted to stop.
  *
  * Every notification carries a dedupe key of
- * `<event>:<contract>:<threshold>`, and the notifications table has a unique
- * index on (recipient, dedupe_key). Running this twice in a night therefore
- * sends nothing twice, which matters because cPanel cron is not exactly-once.
+ * `<event>:<contract>:<deadline>:<threshold>`, and the notifications table has
+ * a unique index on (recipient, dedupe_key). Running this twice in a night
+ * therefore sends nothing twice, which matters because cPanel cron is not
+ * exactly-once. The deadline is part of the key, not just the contract id and
+ * threshold, because a renewal moves `expiry_date`/`notice_deadline` forward
+ * on the same contract row rather than creating a new one — without it, the
+ * next term's "90 days out" would collide with the first term's already-used
+ * key and notify() would report a dedupe hit for a warning nobody has seen.
  */
 final class ExpirySweep
 {
@@ -93,7 +98,7 @@ final class ExpirySweep
                                 : 'can no longer be cancelled on notice'
                         ),
                         $contractId,
-                        'notice:' . $contractId . ':' . $threshold,
+                        'notice:' . $contractId . ':' . $contract['notice_deadline'] . ':' . $threshold,
                         \App\Services\ContractService::toBool($contract['auto_renewal']) ? 'critical' : 'warning'
                     );
                 }
@@ -110,7 +115,7 @@ final class ExpirySweep
                         sprintf('Expires in %d days — %s', $daysToExpiry, $contract['contract_number']),
                         sprintf('%s expires on %s.', $contract['title'], $contract['expiry_date']),
                         $contractId,
-                        'expiry:' . $contractId . ':' . $threshold,
+                        'expiry:' . $contractId . ':' . $contract['expiry_date'] . ':' . $threshold,
                         $daysToExpiry <= 7 ? 'critical' : 'warning'
                     );
                 }

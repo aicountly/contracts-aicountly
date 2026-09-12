@@ -454,6 +454,32 @@ final class ContractRequestService
         $v->assert();
 
         return Database::transaction($this->pdo, function (PDO $pdo) use ($ctx, $requestId, $request, $title, $typeId, $body): array {
+            // Locked and re-checked under the transaction: the checks above ran
+            // before it, and two concurrent conversions of the same approved
+            // request would otherwise both pass and leave two contracts
+            // pointing at one request, with only the last write remembered.
+            $lock = $pdo->prepare(
+                'SELECT status FROM contract_requests WHERE id = ? AND environment = ? AND cmp_id = ? FOR UPDATE'
+            );
+            $lock->execute([$requestId, $ctx->environment, $ctx->cmpId]);
+            $lockedStatus = $lock->fetchColumn();
+            if ($lockedStatus === false) {
+                throw DomainException::notFound('Contract request not found.');
+            }
+            $lockedStatus = (string) $lockedStatus;
+            if ($lockedStatus === 'converted') {
+                throw DomainException::conflict(
+                    'This request has already been converted to a contract.',
+                    'REQUEST_ALREADY_CONVERTED'
+                );
+            }
+            if (! self::transitionAllowed($lockedStatus, 'converted')) {
+                throw DomainException::conflict(
+                    sprintf('A request must be approved for drafting before it becomes a contract (it is %s).', Enums::label($lockedStatus)),
+                    'INVALID_STATUS_TRANSITION'
+                );
+            }
+
             $contract = (new ContractService($pdo))->create($ctx, array_merge($body, [
                 'title'             => $title,
                 'contract_type_id'  => $typeId,
@@ -472,12 +498,22 @@ final class ContractRequestService
 
             $contractId = (int) $contract['id'];
 
-            $pdo->prepare(
+            $converted = $pdo->prepare(
                 "UPDATE contract_requests
                  SET status = 'converted', converted_contract_id = ?, converted_at = CURRENT_TIMESTAMP,
                      updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND environment = ? AND cmp_id = ?"
-            )->execute([$contractId, $requestId, $ctx->environment, $ctx->cmpId]);
+                 WHERE id = ? AND environment = ? AND cmp_id = ? AND status <> 'converted'"
+            );
+            $converted->execute([$contractId, $requestId, $ctx->environment, $ctx->cmpId]);
+            if ($converted->rowCount() === 0) {
+                // The row lock above should make this unreachable, but the
+                // guard costs nothing and means the invariant does not rest
+                // on the lock alone.
+                throw DomainException::conflict(
+                    'This request has already been converted to a contract.',
+                    'REQUEST_ALREADY_CONVERTED'
+                );
+            }
 
             $this->audit->log($ctx, 'contract_request', $requestId, 'request.converted', $contractId, [
                 'status'                => ['from' => (string) $request['status'], 'to' => 'converted'],

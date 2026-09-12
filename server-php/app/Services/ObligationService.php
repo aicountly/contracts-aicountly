@@ -136,6 +136,14 @@ final class ObligationService
      */
     public function listForContract(TenantContext $ctx, int $contractId): array
     {
+        // A contract id from another tenant already returns nothing below, by
+        // the tenant filter alone; this stops there too for a contract in the
+        // caller's own company that they lack contract.view_all to open —
+        // the same narrowing GET /contracts/{id} itself applies.
+        if (! $this->contractVisible($ctx, $contractId)) {
+            return [];
+        }
+
         $st = $this->pdo->prepare(
             "SELECT o.*,
                     (SELECT MIN(x.due_date) FROM obligation_occurrences x
@@ -166,6 +174,16 @@ final class ObligationService
     public function summaryForContract(TenantContext $ctx, int $contractId): array
     {
         $summary = array_fill_keys(Enums::OBLIGATION_STATUSES, 0);
+
+        // Same narrowing as listForContract(): a contract this caller may not
+        // open reports as empty rather than counting occurrences they cannot
+        // otherwise see.
+        if (! $this->contractVisible($ctx, $contractId)) {
+            $summary['total']       = 0;
+            $summary['obligations'] = 0;
+
+            return $summary;
+        }
 
         $st = $this->pdo->prepare(
             'SELECT status, COUNT(*) AS n
@@ -462,16 +480,86 @@ final class ObligationService
     {
         $obligation = $this->findOrFail($ctx, $obligationId);
 
+        return $this->materializeOccurrences($obligation, $ctx->environment, $ctx->cmpId, $horizonDate);
+    }
+
+    /**
+     * Materialise occurrences for every active obligation on every active
+     * contract, across one company or (cmpId null) the whole environment.
+     *
+     * This is the run the class docblock and schedule()'s own comment
+     * describe and that nothing used to make: generateOccurrences() only ever
+     * fired from a contract activating, an obligation being edited, or the
+     * manual endpoint. A renewal moves the contract's expiry date and nothing
+     * else, so the horizon computed at the last generation was never
+     * revisited — an obligation could sit marked 'completed' for a term that
+     * was still running. Cron signature rather than TenantContext, matching
+     * refreshDueStatuses() above: a sweep has no acting user.
+     *
+     * @return int occurrences inserted
+     */
+    public function generateForActiveContracts(string $environment, ?int $cmpId = null): int
+    {
+        $placeholders = implode(', ', array_fill(0, count(Enums::ACTIVE_STATUSES), '?'));
+        $params       = [$environment, ...Enums::ACTIVE_STATUSES];
+
+        $sql = "SELECT o.*,
+                       c.contract_number,
+                       c.title             AS contract_title,
+                       c.status            AS contract_status,
+                       c.effective_date    AS contract_effective_date,
+                       c.commencement_date AS contract_commencement_date,
+                       c.expiry_date       AS contract_expiry_date
+                FROM contract_obligations o
+                JOIN contracts c ON c.id = o.contract_id
+                WHERE o.environment = ? AND o.is_active = TRUE AND c.status IN ({$placeholders})";
+
+        if ($cmpId !== null) {
+            $sql     .= ' AND o.cmp_id = ?';
+            $params[] = $cmpId;
+        }
+
+        $st = $this->pdo->prepare($sql . ' ORDER BY o.id');
+        $st->execute($params);
+
+        $inserted = 0;
+        foreach ($st->fetchAll() ?: [] as $row) {
+            $inserted += $this->materializeOccurrences(
+                $this->hydrateObligation($row),
+                $environment,
+                (int) $row['cmp_id'],
+                null
+            );
+        }
+
+        return $inserted;
+    }
+
+    /**
+     * The body of generateOccurrences(), scoped by raw environment/cmp_id
+     * rather than a TenantContext so generateForActiveContracts() can drive it
+     * from the sweep, which has no acting user to build one from.
+     *
+     * @param array<string,mixed> $obligation
+     */
+    private function materializeOccurrences(
+        array $obligation,
+        string $environment,
+        int $cmpId,
+        ?string $horizonDate
+    ): int {
         if (! ContractService::toBool($obligation['is_active'])) {
             return 0;
         }
+
+        $obligationId = (int) $obligation['id'];
 
         $st = $this->pdo->prepare(
             'SELECT COUNT(*) AS n, MAX(due_date) AS last_due
              FROM obligation_occurrences
              WHERE obligation_id = ? AND environment = ? AND cmp_id = ?'
         );
-        $st->execute([$obligationId, $ctx->environment, $ctx->cmpId]);
+        $st->execute([$obligationId, $environment, $cmpId]);
         $state = $st->fetch();
 
         $rows = self::schedule(
@@ -500,8 +588,8 @@ final class ObligationService
             $insert->execute([
                 $obligationId,
                 (int) $obligation['contract_id'],
-                $ctx->environment,
-                $ctx->cmpId,
+                $environment,
+                $cmpId,
                 $row['sequence_no'],
                 $row['due_date'],
                 Dates::addDays($row['due_date'], $grace),
@@ -519,7 +607,38 @@ final class ObligationService
             $insert->closeCursor();
         }
 
+        if ($inserted > 0) {
+            $this->reopenIfCompleted($obligationId, $environment, $cmpId);
+        }
+
         return $inserted;
+    }
+
+    /**
+     * Undo the close-out in completeOccurrence() once new work has actually
+     * landed on the calendar.
+     *
+     * completeOccurrence() closes the obligation when no live occurrence is
+     * left, which was correct the moment it ran. rollUpObligationStatuses()
+     * will not reopen it later — its own filter only considers rows already
+     * in ('upcoming','due','overdue') — so this is the one place 'completed'
+     * is reversed, and only forward from rows that materializeOccurrences()
+     * just inserted, never from time passing on its own.
+     */
+    private function reopenIfCompleted(int $obligationId, string $environment, int $cmpId): void
+    {
+        $this->pdo->prepare(
+            "UPDATE contract_obligations o
+             SET status = CASE
+                     WHEN EXISTS (SELECT 1 FROM obligation_occurrences x
+                                   WHERE x.obligation_id = o.id AND x.status = 'overdue') THEN 'overdue'
+                     WHEN EXISTS (SELECT 1 FROM obligation_occurrences x
+                                   WHERE x.obligation_id = o.id AND x.status = 'due') THEN 'due'
+                     ELSE 'upcoming'
+                 END,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE o.id = ? AND o.environment = ? AND o.cmp_id = ? AND o.status = 'completed'"
+        )->execute([$obligationId, $environment, $cmpId]);
     }
 
     /**
@@ -822,9 +941,23 @@ final class ObligationService
         return ['WHERE ' . implode("\n  AND ", $clauses), $params];
     }
 
-    /** @return array<string,mixed>|null */
+    /**
+     * One occurrence, or null when it does not exist *or is not visible to
+     * this caller*.
+     *
+     * Narrowed the same way the register in buildOccurrenceWhere() is: the
+     * SELECT below joins contracts and returns contract_number and title, so
+     * scoping by tenant alone would let a user without contract.view_all read
+     * (and, through completeOccurrence()/updateOccurrenceStatus(), which both
+     * load the occurrence through here, write) a colleague's occurrence by id
+     * even though the register never shows it to them.
+     *
+     * @return array<string,mixed>|null
+     */
     public function findOccurrence(TenantContext $ctx, int $occurrenceId): ?array
     {
+        [$visibility, $visibilityParams] = ContractVisibility::existsFor($ctx, 'occ.contract_id', 'occvis');
+
         $st = $this->pdo->prepare(
             'SELECT occ.*,
                     o.title            AS obligation_title,
@@ -840,10 +973,13 @@ final class ObligationService
              FROM obligation_occurrences occ
              JOIN contract_obligations o ON o.id = occ.obligation_id
              JOIN contracts c ON c.id = occ.contract_id
-             WHERE occ.id = ? AND occ.environment = ? AND occ.cmp_id = ?
+             WHERE occ.id = :id AND occ.environment = :env AND occ.cmp_id = :cmp' . $visibility . '
              LIMIT 1'
         );
-        $st->execute([$occurrenceId, $ctx->environment, $ctx->cmpId]);
+        $st->execute(array_merge(
+            ['id' => $occurrenceId, 'env' => $ctx->environment, 'cmp' => $ctx->cmpId],
+            $visibilityParams
+        ));
         $row = $st->fetch();
 
         return is_array($row) ? $this->hydrateOccurrence($row) : null;
@@ -867,6 +1003,10 @@ final class ObligationService
      */
     public function listEvidence(TenantContext $ctx, int $occurrenceId): array
     {
+        // Evidence is only ever as visible as the occurrence it was filed
+        // against, and findOccurrenceOrFail() is where that rule lives.
+        $this->findOccurrenceOrFail($ctx, $occurrenceId);
+
         $st = $this->pdo->prepare(
             'SELECT e.id, e.occurrence_id, e.obligation_id, e.document_id, e.note,
                     e.external_ref, e.uploaded_by, e.created_at, d.title AS document_title
@@ -1284,6 +1424,18 @@ final class ObligationService
         }
 
         return $row;
+    }
+
+    /**
+     * Whether $ctx may open this contract at all.
+     *
+     * Delegated to ContractService so this file does not carry a second
+     * definition of "who may see which contract" alongside buildOccurrenceWhere's
+     * own use of the same rule — a copy here would eventually disagree with it.
+     */
+    private function contractVisible(TenantContext $ctx, int $contractId): bool
+    {
+        return (new ContractService($this->pdo))->find($ctx, $contractId) !== null;
     }
 
     /**

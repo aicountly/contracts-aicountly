@@ -236,4 +236,47 @@ assert_same(2, $byStatus['total'], 'the status filter narrows the queue to the r
 $otherCompany = $service->pipeline($otherCtx, ['bucket' => 'all'], 25, 0);
 assert_same(0, $otherCompany['total'], 'another company sees none of this renewal queue');
 
+// --- find()/recordDecision() cannot leak or rewrite a cycle the caller
+// cannot see -------------------------------------------------------------
+//
+// Without CONTRACT_VIEW_ALL, find() applied no row-level narrowing at all: a
+// caller who could not open the contract through ContractService could still
+// read its title, counterparty and value through the renewal cycle, and
+// recordDecision() — built on the same find()/findOrFail() — would extend the
+// contract's expiry date for an agreement that caller cannot see.
+$mallory = t_context(uuid: 'USER-M', permissions: [
+    \App\Support\Permissions::CONTRACT_VIEW,
+    \App\Support\Permissions::RENEWAL_MANAGE,
+]);
+
+$hiddenId    = $makeContract(['owner_uuid' => 'USER-A']);
+$hiddenCycle = $service->ensureCycle($ctx, $hiddenId);
+
+assert_null(
+    $service->find($mallory, (int) $hiddenCycle['id']),
+    'without view_all, find() cannot read a cycle of a contract the caller does not own, create, or run'
+);
+
+$expiryBefore = $pdo->query("SELECT expiry_date FROM contracts WHERE id = {$hiddenId}")->fetchColumn();
+assert_throws(
+    static fn () => $service->recordDecision($mallory, (int) $hiddenCycle['id'], 'renew', ['renewal_term_months' => 36]),
+    'recordDecision() 404s rather than deciding a cycle the caller cannot see',
+    'not found'
+);
+$expiryAfter = $pdo->query("SELECT expiry_date FROM contracts WHERE id = {$hiddenId}")->fetchColumn();
+assert_same($expiryBefore, $expiryAfter, 'the refused decision leaves the contract expiry untouched');
+
+// The narrowing matches the pipeline exactly: a cycle handed to someone who is
+// neither the contract's owner nor its creator is still visible to them —
+// find() must not become *more* restrictive than buildPipelineWhere().
+$assignedId    = $makeContract(['owner_uuid' => 'USER-A']);
+$assignedCycle = $service->ensureCycle($ctx, $assignedId);
+$pdo->prepare('UPDATE contract_renewals SET owner_uuid = ? WHERE id = ?')
+    ->execute(['USER-M', (int) $assignedCycle['id']]);
+
+assert_not_null(
+    $service->find($mallory, (int) $assignedCycle['id']),
+    'a cycle assigned directly to the caller is visible even without view_all'
+);
+
 t_done('RenewalServiceTest');

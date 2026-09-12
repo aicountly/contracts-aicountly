@@ -12,6 +12,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 
 use App\Services\AmendmentService;
+use App\Services\RenewalService;
+use App\Support\Dates;
 
 $pdo = t_database();
 if ($pdo === null) {
@@ -229,6 +231,53 @@ $draft = $service->create($ctx, $contractId, [
 ]);
 $service->delete($ctx, (int) $draft['id']);
 assert_null($service->find($ctx, (int) $draft['id']), 'a draft amendment can be deleted');
+
+// --- applying an amendment that moves the expiry keeps the open renewal cycle in step ---
+// The cycle's own current_expiry/notice_deadline are a copy of the contract's,
+// kept separately because the nightly sweep and the pipeline buckets filter on
+// the cycle's columns, never the contract's. Left unsynced by apply(), the
+// cycle would keep counting down to the pre-amendment date and the review it
+// should trigger would never fire.
+$renewals       = new RenewalService($pdo);
+$autoContractId = $makeContract([
+    'expiry_date'        => '2028-09-12',
+    'notice_period_days' => 90,
+]);
+$pdo->prepare('UPDATE contracts SET auto_renewal = TRUE WHERE id = ?')->execute([$autoContractId]);
+
+$cycle = $renewals->ensureCycle($ctx, $autoContractId);
+assert_not_null($cycle, 'a contract with an expiry date gets an open renewal cycle');
+assert_same('2028-09-12', $cycle['current_expiry'], 'the cycle starts at the contract expiry');
+assert_same(
+    Dates::noticeDeadline('2028-09-12', 90),
+    $cycle['notice_deadline'],
+    'and the notice deadline the contract implies'
+);
+
+$expiryAmendment = $service->create($ctx, $autoContractId, [
+    'title'           => 'Term shortened',
+    'effective_date'  => '2026-09-12',
+    'affected_fields' => ['expiry_date' => '2027-03-12'],
+]);
+$service->apply($ctx, (int) $expiryAmendment['id']);
+
+$refreshedCycle = $renewals->find($ctx, (int) $cycle['id']);
+assert_same(
+    '2027-03-12',
+    $refreshedCycle['current_expiry'],
+    "applying an amendment that moves expiry_date keeps the open cycle's current_expiry in step"
+);
+assert_same(
+    Dates::noticeDeadline('2027-03-12', 90),
+    $refreshedCycle['notice_deadline'],
+    "and the cycle's notice_deadline, so the renewal sweep counts down to the amended date, not the old one"
+);
+assert_same(
+    Dates::noticeDeadline('2027-03-12', 90),
+    $refreshedCycle['decision_due_date'],
+    'the decision deadline moves with the notice deadline it was derived from'
+);
+assert_same('not_yet_due', $refreshedCycle['status'], 'the cycle itself is untouched — only the dates it carries change');
 
 // --- tenant scoping ----------------------------------------------------------
 $otherCtx = t_context(cmpId: 2, uuid: 'USER-B');

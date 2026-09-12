@@ -46,6 +46,27 @@ final class TextExtractionService
     /** A contract this long is a data-entry accident; the column is not the limit, memory is. */
     private const MAX_TEXT_CHARS = 2_000_000;
 
+    /**
+     * Ceiling on the *uncompressed* size of a .docx zip entry before it is read.
+     *
+     * ZipArchive::getFromName() allocates the whole entry as one PHP string
+     * with no cap of its own, and Deflate lets word/document.xml claim to be
+     * gigabytes while the file on disk is a few hundred kilobytes. This is
+     * generous for any real contract — even a thousand-page one runs to a few
+     * megabytes of markup — and small enough that reading it can never come
+     * close to exhausting a PHP-FPM worker's memory limit.
+     */
+    private const MAX_DOCX_ENTRY_BYTES = 20_000_000;
+
+    /**
+     * Ceiling on how much smaller the compressed entry may be than the
+     * uncompressed size it claims. WordprocessingML compresses well — it
+     * repeats the same run and paragraph tags constantly — but nothing
+     * legitimate approaches three digits; a bomb built from one repeated byte
+     * does, by orders of magnitude.
+     */
+    private const MAX_DOCX_COMPRESSION_RATIO = 200;
+
     private DocumentService $documents;
 
     public function __construct(private PDO $pdo, ?StorageAdapter $storage = null)
@@ -193,6 +214,26 @@ final class TextExtractionService
             $zip = new ZipArchive();
             if ($zip->open($temp) !== true) {
                 return ['text' => null, 'pages' => null, 'scanned' => false, 'reason' => 'That file is not a readable Word document.'];
+            }
+
+            $stat = $zip->statName('word/document.xml');
+            if ($stat === false) {
+                $zip->close();
+
+                return ['text' => null, 'pages' => null, 'scanned' => false, 'reason' => 'The Word document has no body.'];
+            }
+
+            // Checked before a single byte is decompressed, not after: by the
+            // time getFromName() returns, the allocation has already happened.
+            $size     = (int) $stat['size'];
+            $compSize = (int) $stat['comp_size'];
+            if (
+                $size > self::MAX_DOCX_ENTRY_BYTES
+                || ($compSize > 0 && $size / $compSize > self::MAX_DOCX_COMPRESSION_RATIO)
+            ) {
+                $zip->close();
+
+                return ['text' => null, 'pages' => null, 'scanned' => false, 'reason' => 'The Word document is too large to read safely.'];
             }
 
             $xml = $zip->getFromName('word/document.xml');

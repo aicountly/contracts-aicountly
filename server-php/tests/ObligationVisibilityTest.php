@@ -99,4 +99,77 @@ assert_same(
     'contract.view_all sees the whole company, as the repository does'
 );
 
+// The register narrowing above is not the only door onto these rows: every
+// by-id sibling — findOccurrence(), listForContract()/summaryForContract() by
+// contract id, and the two write entry points that load an occurrence
+// through findOccurrence() — must apply the same rule, or a colleague who
+// cannot open the contract from the register can still walk in by id.
+$occurrenceIds = array_map(static fn (array $r): int => (int) $r['id'], $asOwner['items']);
+sort($occurrenceIds);
+assert_true(count($occurrenceIds) >= 2, 'the fixture generated enough occurrences to exercise two separate write paths');
+[$occA, $occB] = [$occurrenceIds[0], $occurrenceIds[1]];
+
+assert_null(
+    $obligations->findOccurrence($colleague, $occA),
+    'a colleague without view_all cannot open the occurrence by id either'
+);
+$ownerView = $obligations->findOccurrence($owner, $occA);
+assert_not_null($ownerView, 'the owner can still open it by id');
+assert_same(
+    'Confidential Acquisition Support',
+    (string) ($ownerView['contract_title'] ?? ''),
+    'and the contract title still comes through for someone entitled to it'
+);
+assert_not_null(
+    $obligations->findOccurrence($auditor, $occB),
+    'contract.view_all can open any occurrence in the company, as the repository does'
+);
+
+assert_count(
+    0,
+    $obligations->listForContract($colleague, (int) $hers['id']),
+    'a colleague without view_all sees no obligations on a contract they cannot open'
+);
+assert_true(
+    count($obligations->listForContract($owner, (int) $hers['id'])) > 0,
+    'the owner still sees their own obligations by contract id'
+);
+assert_same(
+    0,
+    $obligations->summaryForContract($colleague, (int) $hers['id'])['total'],
+    'and no occurrence summary either'
+);
+assert_true(
+    $obligations->summaryForContract($owner, (int) $hers['id'])['total'] > 0,
+    'while the owner gets a real summary'
+);
+
+// Writing through the by-id path has to be blocked the same way reading is,
+// or the narrowing above is a read-only illusion: a colleague who cannot see
+// the occurrence could otherwise still complete or restatus it directly.
+assert_throws(
+    static fn () => $obligations->completeOccurrence($colleague, $occA, ['completion_note' => 'closed by an outsider']),
+    'a colleague without view_all cannot complete an occurrence on a contract they cannot open',
+    'occurrence not found'
+);
+assert_throws(
+    static fn () => $obligations->updateOccurrenceStatus($colleague, $occB, 'waived', null),
+    'a colleague without view_all cannot restatus an occurrence either',
+    'occurrence not found'
+);
+assert_throws(
+    static fn () => $obligations->listEvidence($colleague, $occA),
+    'a colleague without view_all cannot list evidence on an occurrence they cannot open',
+    'occurrence not found'
+);
+
+// The owner's own writes still have to work, or the fix would be a denial of
+// service rather than a narrowing.
+$completed = $obligations->completeOccurrence($owner, $occA, [
+    'completion_note' => 'filed',
+    'evidence_note'   => 'the actual report',
+]);
+assert_same('completed', (string) $completed['status'], 'the owner can still complete their own occurrence');
+assert_count(1, $obligations->listEvidence($owner, $occA), 'and read back the evidence they just filed');
+
 t_done('ObligationVisibilityTest');

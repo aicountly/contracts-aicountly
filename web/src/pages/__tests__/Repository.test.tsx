@@ -206,4 +206,36 @@ describe('Repository', () => {
       expect(screen.getByRole('button', { name: /^unstar /i })).toBeInTheDocument()
     })
   })
+
+  it('neutralises a formula-injection payload before writing the "Export selection" CSV', async () => {
+    const payloadTitle = "=cmd|' /C calc'!A0"
+    contractsResponse = page([
+      contract({ id: 7, title: payloadTitle, counterparty_name: '@SUM(1+9)*cmd' }),
+    ])
+
+    const blobs: Blob[] = []
+    const createObjectURL = vi.fn((blob: Blob) => {
+      blobs.push(blob)
+      return 'blob:mock'
+    })
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL: vi.fn() })
+
+    const user = userEvent.setup()
+    renderRepository()
+    await screen.findByText(payloadTitle)
+
+    await user.click(screen.getByRole('checkbox', { name: (name) => name.startsWith('Select =cmd') }))
+    await user.click(screen.getByRole('button', { name: /export selection/i }))
+
+    expect(blobs).toHaveLength(1)
+    const csv = await blobs[0].text()
+    // Guarded: the formula characters no longer lead the cell.
+    expect(csv).toContain(`'${payloadTitle}`)
+    expect(csv).toContain("'@SUM(1+9)*cmd")
+    // Not guarded would leave the raw payload as the first thing on its line.
+    expect(csv).not.toMatch(/^=cmd/m)
+    expect(csv).not.toMatch(/,@SUM/m)
+
+    vi.unstubAllGlobals()
+  })
 })
