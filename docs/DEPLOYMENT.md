@@ -70,6 +70,23 @@ In cPanel → PostgreSQL Databases:
 3. Confirm the `pdo_pgsql` PHP extension is enabled (cPanel → Select PHP
    Version → Extensions). `GET /api/health` reports it if it is missing.
 
+Creating the database and user this way does not guarantee PostgreSQL will
+accept a connection from PHP. If `database/migrate.php` fails with `no
+pg_hba.conf entry for host "127.0.0.1", user "...", database "...", SSL
+off`, the database and credentials are fine — PostgreSQL's own access
+control (`pg_hba.conf`) has no rule matching this connection, which is
+server configuration outside cPanel's database UI. Two ways out:
+
+- Connect over the local Unix socket instead of TCP: set `DB_SOCKET` in
+  `api/.env` (e.g. `DB_SOCKET=/var/run/postgresql`, or wherever
+  `postgresql.conf`'s `unix_socket_directories` points — ask the host if
+  unsure) and leave `DB_HOST` unset. The `local` pg_hba.conf line is almost
+  always already open for the owning user, so this needs no server change.
+- Otherwise, ask whoever administers PostgreSQL (the hosting provider, or
+  WHM root) to add a `host`/`hostssl` entry for this database, user, and
+  `127.0.0.1/32`, then reload PostgreSQL. If they only add a `hostssl`
+  entry, also set `DB_SSLMODE=require` in `api/.env`.
+
 ### 3. `api/.env`
 
 Created by hand, once. It is never uploaded and never deleted.
