@@ -56,7 +56,15 @@ final class Http
             // misconfiguration or an attempt to walk us somewhere else; either
             // way the caller should see it rather than have it silently obeyed.
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_PROTOCOLS_STR  => 'https,http',
+            // CURLOPT_PROTOCOLS_STR needs PHP 8.3, which is newer than this
+            // project's own composer.json floor (7.4) and newer than
+            // production's actual PHP — there the constant does not exist at
+            // all, so this line fataled on every single call through here
+            // (session validation included) with "Undefined constant
+            // App\Core\CURLOPT_PROTOCOLS_STR". The classic bitmask constant
+            // gives the same http(s)-only restriction and has worked since
+            // PHP 5.5.
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         ];
 
         if (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
