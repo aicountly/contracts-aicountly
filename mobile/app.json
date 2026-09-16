@@ -78,7 +78,10 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -112,7 +115,8 @@
         {
           "android": {
             "enableProguardInReleaseBuilds": true,
-            "enableShrinkResourcesInReleaseBuilds": true
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "enableMinifyInReleaseBuilds": true
           }
         }
       ]
@@ -120,8 +124,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "TODO-run-eas-init-to-populate"
+        "projectId": "72d543f1-02f5-4974-a259-89ef820433c0"
       }
-    }
+    },
+    "owner": "aicountly"
   }
 }
