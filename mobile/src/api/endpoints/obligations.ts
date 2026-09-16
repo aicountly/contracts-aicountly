@@ -1,4 +1,4 @@
-import { api } from '../client';
+import { api, apiUpload } from '../client';
 import type { ObligationOccurrenceRow, ObligationOccurrenceStatus, Paged } from '../../types/contracts';
 
 export interface ListObligationsParams {
@@ -58,6 +58,18 @@ export function generateOccurrences(obligationId: number | string): Promise<void
 
 export function completeOccurrence(occurrenceId: number | string, note?: string): Promise<void> {
   return api.post<void>(`/occurrences/${occurrenceId}/complete`, { completion_note: note });
+}
+
+/** Same endpoint, as a multipart request — for the evidence-required case. */
+export function completeOccurrenceWithEvidence(
+  occurrenceId: number | string,
+  note: string | undefined,
+  evidence: { uri: string; name: string; mimeType: string },
+): Promise<void> {
+  const form = new FormData();
+  if (note) form.append('completion_note', note);
+  form.append('evidence', { uri: evidence.uri, name: evidence.name, type: evidence.mimeType } as unknown as Blob);
+  return apiUpload<void>(`/occurrences/${occurrenceId}/complete`, form);
 }
 
 export function setOccurrenceStatus(occurrenceId: number | string, status: ObligationOccurrenceStatus, note?: string): Promise<void> {

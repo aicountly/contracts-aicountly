@@ -101,6 +101,13 @@
       "expo-status-bar",
       "expo-sharing",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Attach a photo as evidence when completing an obligation.",
+          "cameraPermission": "Take a photo as evidence when completing an obligation."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

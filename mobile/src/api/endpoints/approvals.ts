@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { ApprovalQueueItem, ApprovalActionName, Paged } from '../../types/contracts';
+import type { ApprovalQueueItem, ApprovalActionName, ApprovalWorkflow, Paged } from '../../types/contracts';
 
 export interface ApprovalStepRow {
   id?: number;
@@ -48,4 +48,8 @@ export function actOnApproval(instanceId: number | string, action: ApprovalActio
 
 export function cancelApproval(instanceId: number | string): Promise<void> {
   return api.post<void>(`/approvals/${instanceId}/cancel`);
+}
+
+export function listApprovalWorkflows(): Promise<ApprovalWorkflow[]> {
+  return api.get<ApprovalWorkflow[]>('/approval-workflows');
 }
