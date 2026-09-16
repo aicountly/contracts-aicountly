@@ -122,16 +122,11 @@
       ]
     ],
     "extra": {
-<<<<<<< HEAD
       "router": {},
       "eas": {
         "projectId": "72d543f1-02f5-4974-a259-89ef820433c0"
       }
     },
     "owner": "aicountly"
-=======
-      "router": {}
-    }
->>>>>>> d501ae0d38b74d6cb28962197e2962ae0a80b357
   }
 }
