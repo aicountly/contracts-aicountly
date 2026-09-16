@@ -14,6 +14,7 @@ interface MenuItem {
 }
 
 const ITEMS: MenuItem[] = [
+  { icon: 'search-outline', label: 'Search', message: 'Across contracts, clause wording and document text.', href: '/more/search' },
   { icon: 'document-text-outline', label: 'Templates', message: 'Standing wording with merge variables to draft from.', href: '/more/templates' },
   { icon: 'library-outline', label: 'Clause Library', message: 'Approved wording, by subject, with fallback and prohibited positions.', href: '/more/clause-library' },
   { icon: 'book-outline', label: 'Playbooks', message: 'The positions this company negotiates from, stated as rules.', href: '/more/playbooks' },
