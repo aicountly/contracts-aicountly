@@ -19,6 +19,7 @@ const ITEMS: MenuItem[] = [
   { icon: 'library-outline', label: 'Clause Library', message: 'Approved wording, by subject, with fallback and prohibited positions.', href: '/more/clause-library' },
   { icon: 'book-outline', label: 'Playbooks', message: 'The positions this company negotiates from, stated as rules.', href: '/more/playbooks' },
   { icon: 'sparkles-outline', label: 'AI Insights', message: 'Portfolio-wide findings surfaced by AI review.', href: '/more/ai-insights' },
+  { icon: 'settings-outline', label: 'Settings', message: 'Contract types, departments, risk rules, roles and account.', href: '/more/settings' },
 ];
 
 export default function MoreScreen() {
