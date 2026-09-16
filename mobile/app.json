@@ -118,10 +118,7 @@
       ]
     ],
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "TODO-run-eas-init-to-populate"
-      }
+      "router": {}
     }
   }
 }
