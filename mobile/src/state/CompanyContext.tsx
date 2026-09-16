@@ -135,6 +135,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
   }, [loadCompany]);
 
   useEffect(() => {
+    // Runs the async bootstrap once on mount (and again if `boot` identity
+    // changes); the state it sets belongs to that async flow, not to this
+    // effect's own synchronous body, so the set-state-in-effect rule doesn't
+    // apply the way it would to a direct setState call here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void boot();
   }, [boot]);
 

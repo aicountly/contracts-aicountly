@@ -85,7 +85,7 @@ export function AiTab({ contractId }: AiTabProps) {
       <Card>
         <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: colors.textPrimary, marginBottom: 4 }}>Ask Your Contract</Text>
         <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: colors.textMuted, marginBottom: 10 }}>
-          Answers grounded in this contract's own text, with citations.
+          Answers grounded in this contract&apos;s own text, with citations.
         </Text>
         <TextInput
           value={question}

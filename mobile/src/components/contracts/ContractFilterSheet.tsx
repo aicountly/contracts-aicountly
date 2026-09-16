@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -50,9 +50,15 @@ export function ContractFilterSheet({ visible, onClose, filters, onApply, contra
   const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<ContractFilters>(filters);
 
-  useEffect(() => {
-    if (visible) setDraft(filters);
-  }, [visible, filters]);
+  // Re-seeded each time the sheet opens, adjusted during render rather than in
+  // a useEffect — the sheet stays mounted (inside a Modal) while closed.
+  const [wasVisible, setWasVisible] = useState(false);
+  if (visible && !wasVisible) {
+    setWasVisible(true);
+    setDraft(filters);
+  } else if (!visible && wasVisible) {
+    setWasVisible(false);
+  }
 
   function set<K extends keyof ContractFilters>(key: K, value: ContractFilters[K]) {
     setDraft((d) => ({ ...d, [key]: value }));

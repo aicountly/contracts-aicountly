@@ -1,4 +1,4 @@
-import { FlatList, Text, View } from 'react-native';
+import { FlatList, Text } from 'react-native';
 import { ScreenContainer, Card, LoadingState, ErrorState, EmptyState } from '../../../src/components';
 import { colors } from '../../../src/theme/colors';
 import { formatDateTime } from '../../../src/utils/format';

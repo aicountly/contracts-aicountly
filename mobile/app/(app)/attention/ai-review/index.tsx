@@ -71,7 +71,7 @@ export default function AiReviewQueueScreen() {
               {item.source_excerpt ? (
                 <View style={{ backgroundColor: colors.surface, borderRadius: 8, padding: 10, marginTop: 8 }}>
                   <Text style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }} numberOfLines={3}>
-                    "{item.source_excerpt}"
+                    &ldquo;{item.source_excerpt}&rdquo;
                   </Text>
                 </View>
               ) : null}

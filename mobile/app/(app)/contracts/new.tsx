@@ -80,7 +80,7 @@ export default function NewContractScreen() {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 20, color: colors.textPrimary, marginBottom: 4 }}>New contract</Text>
         <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, color: colors.textMuted, marginBottom: 20 }}>
-          Starts as a draft — you can fill in the rest from the contract's Overview tab.
+          Starts as a draft — you can fill in the rest from the contract&apos;s Overview tab.
         </Text>
 
         {submitError ? (

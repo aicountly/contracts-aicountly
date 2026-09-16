@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Modal, Pressable, View } from 'react-native';
+import { Modal, Pressable } from 'react-native';
 
 interface BottomSheetProps {
   visible: boolean;

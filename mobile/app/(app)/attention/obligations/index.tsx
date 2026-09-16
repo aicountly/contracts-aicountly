@@ -136,6 +136,7 @@ export default function ObligationsQueueScreen() {
           renderItem={({ item }) => (
             <ObligationRow
               occurrence={item}
+              busy={busyId === item.id}
               onPress={
                 item.status !== 'completed' ? () => handleComplete(item) : () => router.push(`/contracts/${item.contract_id}?tab=obligations`)
               }

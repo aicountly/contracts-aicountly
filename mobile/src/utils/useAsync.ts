@@ -21,6 +21,11 @@ export function useAsync<T>(fetcher: () => Promise<T>, deps: unknown[] = []): As
 
   useEffect(() => {
     let cancelled = false;
+    // Resetting loading/error at the start of each fetch is React's own
+    // documented data-fetching pattern (see "Synchronizing with Effects");
+    // the alternative (deriving them during render) would need to duplicate
+    // this hook's [nonce, ...deps] identity tracking for no behavioral gain.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
     fetcher()

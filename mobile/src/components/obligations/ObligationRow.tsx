@@ -9,13 +9,15 @@ interface ObligationRowProps {
   occurrence: ObligationOccurrenceRow;
   onPress?: () => void;
   showContract?: boolean;
+  /** True while a complete-occurrence action for this row is in flight. */
+  busy?: boolean;
 }
 
 /** Shared by the in-contract Obligations tab and the cross-contract Attention queue. */
-export function ObligationRow({ occurrence, onPress, showContract = true }: ObligationRowProps) {
+export function ObligationRow({ occurrence, onPress, showContract = true, busy = false }: ObligationRowProps) {
   const due = daysLabel(occurrence.days_to_due);
   const content = (
-    <Card style={{ marginBottom: 10 }}>
+    <Card style={{ marginBottom: 10, opacity: busy ? 0.6 : 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: colors.textPrimary }} numberOfLines={2}>
@@ -50,5 +52,11 @@ export function ObligationRow({ occurrence, onPress, showContract = true }: Obli
     </Card>
   );
 
-  return onPress ? <Pressable onPress={onPress}>{content}</Pressable> : content;
+  return onPress ? (
+    <Pressable onPress={busy ? undefined : onPress} disabled={busy}>
+      {content}
+    </Pressable>
+  ) : (
+    content
+  );
 }
