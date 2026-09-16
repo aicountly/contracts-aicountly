@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# Mobile quality gate — typecheck, lint, test.
+#
+# Runs on any PR or push that touches mobile/**, so a regression here is
+# caught before merge the same way web/ and server-php/ are checked by their
+# own deploy workflows' build/lint steps. mobile/ is source-only in this
+# monorepo (not part of the cPanel deploy pipeline — see deploy-sandbox.yml
+# / deploy-production.yml, which build web/ and server-php/ only), so it has
+# no deploy workflow of its own to piggy-back a check on; this is that check.
+# ---------------------------------------------------------------------------
+name: Mobile Quality
+
+on:
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-quality.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-quality.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # No .test.ts files exist yet (see mobile/README.md's Testing section),
+      # so this would otherwise fail on "no tests found" before the first one
+      # is ever written. --passWithNoTests keeps the gate green today and
+      # starts enforcing the moment a real test lands, with no workflow
+      # change needed then.
+      - name: Test
+        run: npm test -- --passWithNoTests

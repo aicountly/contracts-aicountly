@@ -6,7 +6,7 @@ import { ScreenContainer, Card, PrimaryButton } from '../../../../src/components
 import { colors } from '../../../../src/theme/colors';
 import { useAuth } from '../../../../src/auth/AuthProvider';
 import { useCompany } from '../../../../src/state/CompanyContext';
-import { AUTH_ORIGIN } from '../../../../src/config/env';
+import { getAccountDeletionUrl } from '../../../../src/config/env';
 
 export default function AccountScreen() {
   const router = useRouter();
@@ -77,7 +77,7 @@ export default function AccountScreen() {
             Your AICOUNTLY account is shared across every AICOUNTLY product, not just Contracts, so it&apos;s deleted from the account portal rather than from inside this app.
           </Text>
           <View style={{ marginTop: 12 }}>
-            <PrimaryButton label="Open account portal" variant="secondary" onPress={() => void Linking.openURL(AUTH_ORIGIN)} />
+            <PrimaryButton label="Delete account" variant="danger" onPress={() => void Linking.openURL(getAccountDeletionUrl())} />
           </View>
         </Card>
       </ScrollView>
