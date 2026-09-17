@@ -90,7 +90,7 @@ src/
 
 ## Building (EAS)
 
-Not yet buildable — `eas.json`'s `extra.eas.projectId` is a placeholder (`TODO-run-eas-init-to-populate`). Once a real project exists (`eas init`, or an `EXPO_TOKEN` secret for CI):
+`app.json`'s `extra.eas.projectId` is linked to a real EAS project.
 
 ```bash
 npm install -g eas-cli
@@ -104,7 +104,14 @@ npm run eas:submit:android:production
 npm run eas:submit:android:open-testing
 ```
 
-No GitHub Actions build/submit workflow exists yet either (unlike `mobile-quality.yml` below) — landing one before `projectId` is real would look ready but silently fail.
+`eas build` packages whatever is in your local working directory, not what's on GitHub — always `git pull` before building, and rebuild after any `app.json`/source change before uploading to a store console.
+
+No GitHub Actions build/submit workflow exists yet either (unlike `mobile-quality.yml` below).
+
+### Versioning
+
+- `expo.version` in `app.json` (e.g. `1.0.0`) is the user-facing marketing version. It's managed **manually and only on request** — never bumped automatically by tooling or by an agent working in this repo. A fresh app starts at `1.0.0`.
+- `ios.buildNumber` / `android.versionCode` in `app.json` are internal build identifiers, not shown to users. Because `eas.json`'s `cli.appVersionSource` is `"remote"` and the `production`/`testflight` profiles set `autoIncrement: true`, EAS ignores the static values in `app.json` and tracks/auto-increments both numbers on its own servers, once per build. That counter only ever goes up — required by both stores, which reject an upload whose build number isn't strictly greater than the last one — so it will not match or reset alongside a `version` change, and that's expected, not a bug.
 
 ## Out of scope / web-only
 
